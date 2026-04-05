@@ -206,7 +206,21 @@ $script:RenderAction = {
 
     $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
     $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
-    if ($signature -eq $script:LastRenderSignature) {
+    $forceRepaint = $false
+    if ($KeyInfo -and $KeyInfo.Key -in @(
+            [System.ConsoleKey]::Spacebar,
+            [System.ConsoleKey]::UpArrow,
+            [System.ConsoleKey]::DownArrow,
+            [System.ConsoleKey]::LeftArrow,
+            [System.ConsoleKey]::RightArrow,
+            [System.ConsoleKey]::Home,
+            [System.ConsoleKey]::End,
+            [System.ConsoleKey]::Tab
+        )) {
+        $forceRepaint = $true
+    }
+
+    if (-not $forceRepaint -and $signature -eq $script:LastRenderSignature) {
         if ($script:EnableTelemetry) {
             $script:Perf.SkippedUnchanged++
             $perfStart.Stop()
