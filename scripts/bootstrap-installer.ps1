@@ -32,7 +32,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $moduleName = 'pwsh-syntax-highlighting'
-$profileImportLine = "Import-Module '$moduleName' -ErrorAction SilentlyContinue"
+$profileImportLine = "try { Import-Module '$moduleName' } catch { }"
 $moduleRoot = Join-Path (Join-Path $HOME 'Documents\PowerShell\Modules') $moduleName
 
 function Write-Info {
@@ -67,8 +67,10 @@ function Add-ProfileImport {
         New-Item -Path $profilePath -ItemType File -Force | Out-Null
     }
 
-    $profileContent = Get-Content -LiteralPath $profilePath -Raw -ErrorAction SilentlyContinue
-    if ($null -eq $profileContent) {
+    try {
+        $profileContent = Get-Content -LiteralPath $profilePath -Raw -ErrorAction Stop
+    }
+    catch {
         $profileContent = ''
     }
 
@@ -87,7 +89,12 @@ function Remove-ProfileImport {
         return
     }
 
-    [string[]]$lines = @(Get-Content -LiteralPath $profilePath -ErrorAction SilentlyContinue)
+    try {
+        [string[]]$lines = @(Get-Content -LiteralPath $profilePath -ErrorAction Stop)
+    }
+    catch {
+        return
+    }
     if ($null -eq $lines -or $lines.Count -eq 0) {
         return
     }
@@ -97,7 +104,7 @@ function Remove-ProfileImport {
     [string[]]$filtered = @($lines | Where-Object { $_ -notmatch $pattern })
 
     if ($filtered.Count -gt 0) {
-        Set-Content -LiteralPath $profilePath -Value $filtered -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath $profilePath -Value $filtered
     }
 
     Write-Good "Removed module autoload entries from profile: $profilePath"
@@ -126,12 +133,12 @@ function Install-FromZip {
         New-Item -Path $moduleRoot -ItemType Directory -Force | Out-Null
     }
 
-    Get-ChildItem -LiteralPath $moduleRoot -Force -ErrorAction SilentlyContinue |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath $moduleRoot -Force |
+    Remove-Item -Recurse -Force
 
     $null = Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force
 
-    Remove-Module $moduleName -ErrorAction SilentlyContinue
+    Remove-Module $moduleName
     Import-Module $moduleName -Force
 
     Add-ProfileImport
@@ -141,7 +148,7 @@ function Install-FromZip {
 }
 
 function Uninstall-ModuleLocal {
-    Remove-Module $moduleName -ErrorAction SilentlyContinue
+    Remove-Module $moduleName
 
     if (Test-Path -LiteralPath $moduleRoot) {
         Remove-Item -LiteralPath $moduleRoot -Recurse -Force

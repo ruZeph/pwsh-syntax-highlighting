@@ -434,6 +434,8 @@ $functionKeyMap = @(
     @{ Key = 'Alt+b'; Function = 'BackwardWord' }
     @{ Key = 'Ctrl+a'; Function = 'BeginningOfLine' }
     @{ Key = 'Ctrl+e'; Function = 'EndOfLine' }
+    @{ Key = 'Ctrl+v'; Function = 'Paste' }
+    @{ Key = 'Shift+Insert'; Function = 'Paste' }
     @{ Key = 'Shift+Tab'; Function = 'TabCompletePrevious' }
     @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
     @{ Key = 'Delete'; Function = 'DeleteChar' }
@@ -445,6 +447,8 @@ if ($script:SafeMode) {
         @{ Key = 'DownArrow'; Function = 'NextHistory' }
         @{ Key = 'RightArrow'; Function = 'ForwardChar' }
         @{ Key = 'LeftArrow'; Function = 'BackwardChar' }
+        @{ Key = 'Ctrl+v'; Function = 'Paste' }
+        @{ Key = 'Shift+Insert'; Function = 'Paste' }
         @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
         @{ Key = 'Delete'; Function = 'DeleteChar' }
     )
@@ -507,6 +511,7 @@ foreach ($entry in $functionKeyMap) {
                 'BackwardChar' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardChar($key, $arg) }
                 'BeginningOfLine' { [Microsoft.PowerShell.PSConsoleReadLine]::BeginningOfLine($key, $arg) }
                 'EndOfLine' { [Microsoft.PowerShell.PSConsoleReadLine]::EndOfLine($key, $arg) }
+                'Paste' { [Microsoft.PowerShell.PSConsoleReadLine]::Paste($key, $arg) }
                 'NextWord' { [Microsoft.PowerShell.PSConsoleReadLine]::NextWord($key, $arg) }
                 'BackwardWord' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardWord($key, $arg) }
                 'TabCompletePrevious' { [Microsoft.PowerShell.PSConsoleReadLine]::TabCompletePrevious($key, $arg) }
