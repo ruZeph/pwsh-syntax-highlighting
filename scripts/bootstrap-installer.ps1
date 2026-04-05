@@ -3,7 +3,7 @@
     Bootstrap installer for pwsh-syntax-highlighting module.
 .DESCRIPTION
     Downloads and installs pwsh-syntax-highlighting from GitHub to the current user's module path.
-    Supports interactive menu, direct install, direct update, and direct uninstall modes.
+    Supports interactive menu with runtime flag configuration.
 .PARAMETER Install
     If specified, install the module without prompting.
 .PARAMETER Update
@@ -18,12 +18,6 @@
     GitHub repository name; defaults to 'pwsh-syntax-highlighting'.
 .PARAMETER Branch
     Git branch to download; defaults to 'main'.
-.PARAMETER EnableMetrics
-    If specified, enable runtime metrics collection (PWSH_SYNTAX_HIGHLIGHTING_METRICS=1).
-.PARAMETER EnableDebug
-    If specified, enable debug trace logging (PWSH_SYNTAX_HIGHLIGHTING_DEBUG=1).
-.PARAMETER SafeMode
-    If specified, enable safe mode with reduced keymap (PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE=1).
 #>
 [CmdletBinding()]
 param(
@@ -31,9 +25,6 @@ param(
     [switch]$Update,
     [switch]$Uninstall,
     [switch]$NoProfileUpdate,
-    [switch]$EnableMetrics,
-    [switch]$EnableDebug,
-    [switch]$SafeMode,
     [ValidateNotNullOrEmpty()]
     [string]$RepoOwner = 'ruZeph',
     [ValidateNotNullOrEmpty()]
@@ -46,6 +37,11 @@ $ErrorActionPreference = 'Stop'
 $moduleName = 'pwsh-syntax-highlighting'
 $profileImportLine = "try { Import-Module '$moduleName' } catch { }"
 $moduleRoot = Join-Path (Join-Path $HOME 'Documents\PowerShell\Modules') $moduleName
+
+# Runtime flag configuration state
+$script:EnableMetrics = $false
+$script:EnableDebug = $false
+$script:SafeMode = $false
 
 function Write-Info {
     param([string]$Message)
@@ -94,8 +90,8 @@ function Add-ProfileImport {
         Write-Info 'Profile already contains autoload line.'
     }
 
-    # Add runtime flag environment variables if requested
-    if ($EnableMetrics -or $EnableDebug -or $SafeMode) {
+    # Add runtime flags if any are enabled
+    if ($script:EnableMetrics -or $script:EnableDebug -or $script:SafeMode) {
         Add-RuntimeFlags -ProfilePath $profilePath
     }
 }
@@ -104,21 +100,62 @@ function Add-RuntimeFlags {
     param([string]$ProfilePath)
 
     $flagLines = @()
-    if ($EnableMetrics) {
+    if ($script:EnableMetrics) {
         $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_METRICS", "1", "User")'
-        Write-Good "Enabled metrics collection"
     }
-    if ($EnableDebug) {
+    if ($script:EnableDebug) {
         $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_DEBUG", "1", "User")'
-        Write-Good "Enabled debug tracing"
     }
-    if ($SafeMode) {
+    if ($script:SafeMode) {
         $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE", "1", "User")'
-        Write-Good "Enabled safe mode"
     }
 
-    $flagContent = "`n# pwsh-syntax-highlighting runtime flags`n" + ($flagLines -join "`n")
-    Add-Content -LiteralPath $ProfilePath -Value $flagContent
+    if ($flagLines.Count -gt 0) {
+        $flagContent = "`n# pwsh-syntax-highlighting runtime flags`n" + ($flagLines -join "`n")
+        Add-Content -LiteralPath $ProfilePath -Value $flagContent
+        Write-Good "Runtime flags configured:"
+        if ($script:EnableMetrics) { Write-Host "  [X] Metrics collection enabled" -ForegroundColor Green }
+        if ($script:EnableDebug) { Write-Host "  [X] Debug tracing enabled" -ForegroundColor Green }
+        if ($script:SafeMode) { Write-Host "  [X] Safe mode enabled" -ForegroundColor Green }
+    }
+}
+
+function Show-FlagMenu {
+    while ($true) {
+        Write-Host ''
+        Write-Host 'Configure Runtime Flags' -ForegroundColor Cyan
+        Write-Host "1) Metrics collection      $($script:EnableMetrics ? '[X]' : '[ ]')"
+        Write-Host "2) Debug tracing           $($script:EnableDebug ? '[X]' : '[ ]')"
+        Write-Host "3) Safe mode               $($script:SafeMode ? '[X]' : '[ ]')"
+        Write-Host 'B) Back to main menu'
+        Write-Host ''
+
+        $choice = Read-Host 'Select option'
+        switch -Regex ($choice) {
+            '^1$' {
+                $script:EnableMetrics = -not $script:EnableMetrics
+                Write-Good "Metrics collection $(if ($script:EnableMetrics) { 'enabled' } else { 'disabled' })"
+                break
+            }
+            '^2$' {
+                $script:EnableDebug = -not $script:EnableDebug
+                Write-Good "Debug tracing $(if ($script:EnableDebug) { 'enabled' } else { 'disabled' })"
+                break
+            }
+            '^3$' {
+                $script:SafeMode = -not $script:SafeMode
+                Write-Good "Safe mode $(if ($script:SafeMode) { 'enabled' } else { 'disabled' })"
+                break
+            }
+            '^(b|back)$' {
+                return
+            }
+            default {
+                Write-WarnMsg 'Invalid selection.'
+                break
+            }
+        }
+    }
 }
 
 function Remove-ProfileImport {
@@ -240,35 +277,40 @@ function Update-ModuleLocal {
 }
 
 function Start-Menu {
-    Write-Host ''
-    Write-Host 'pwsh-syntax-highlighting bootstrap' -ForegroundColor Magenta
-    Write-Host '1) Install to current user + autoload in profile'
-    Write-Host '2) Update existing installation'
-    Write-Host '3) Uninstall from current user + remove profile autoload'
-    Write-Host 'Q) Quit'
-    Write-Host ''
+    while ($true) {
+        Write-Host ''
+        Write-Host 'pwsh-syntax-highlighting bootstrap' -ForegroundColor Magenta
+        Write-Host '1) Install to current user + autoload in profile'
+        Write-Host '2) Update existing installation'
+        Write-Host '3) Configure runtime flags'
+        Write-Host '4) Uninstall from current user + remove profile autoload'
+        Write-Host 'Q) Quit'
+        Write-Host ''
 
-    $choice = Read-Host 'Select an option'
-    switch -Regex ($choice) {
-        '^(1|i|install)$' {
-            Install-FromZip
-            break
-        }
-        '^(2|u|update)$' {
-            Update-ModuleLocal
-            break
-        }
-        '^(3|uninstall)$' {
-            Uninstall-ModuleLocal
-            break
-        }
-        '^(q|quit)$' {
-            Write-Info 'No changes made.'
-            break
-        }
-        default {
-            Write-WarnMsg 'Invalid selection. No changes made.'
-            break
+        $choice = Read-Host 'Select an option'
+        switch -Regex ($choice) {
+            '^(1|i|install)$' {
+                Install-FromZip
+                return
+            }
+            '^(2|u|update)$' {
+                Update-ModuleLocal
+                return
+            }
+            '^(3|f|flags)$' {
+                Show-FlagMenu
+            }
+            '^(4|uninstall)$' {
+                Uninstall-ModuleLocal
+                return
+            }
+            '^(q|quit)$' {
+                Write-Info 'No changes made.'
+                return
+            }
+            default {
+                Write-WarnMsg 'Invalid selection. No changes made.'
+            }
         }
     }
 }

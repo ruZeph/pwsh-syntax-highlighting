@@ -45,9 +45,9 @@ The menu supports:
 
 - Install to current user module path
 - Update existing installation
-- Automatic profile autoload
-- Advanced runtime flag configuration
+- Interactive runtime flag configuration
 - Complete uninstall with environment cleanup
+- Automatic profile autoload
 
 ### Option B: Local dev import (when you already have the folder)
 
@@ -103,22 +103,27 @@ See [scripts/example-custom-theme.ps1](scripts/example-custom-theme.ps1) for a c
 
 ### Runtime Flags via Bootstrap
 
-Enable common features during installation:
+Configure runtime flags interactively during installation:
 
 ```powershell
-# Install with metrics and debug enabled
-irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | 
-    iex -ArgumentList @('-Install', '-EnableMetrics', '-EnableDebug')
+# Run the bootstrap installer with interactive menu
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | iex
 
-# Or add flags via menu: install → then manually add to profile
-# Environment will be persisted to your user profile
+# Menu options:
+# 1) Install to current user + autoload in profile
+# 2) Update existing installation
+# 3) Configure runtime flags  <-- Select this to toggle flags
+# 4) Uninstall from current user + remove profile autoload
+# Q) Quit
 ```
 
-Supported bootstrap flags:
+In the runtime flags menu, you can toggle:
 
-- `-EnableMetrics`: Enable `$SyntaxHighlightingMetrics` collection
-- `-EnableDebug`: Enable `$SyntaxHighlightingDebugTrace` debug logging
-- `-SafeMode`: Enable safe mode with reduced keymap
+- **Metrics collection**: Enable `$SyntaxHighlightingMetrics` for performance monitoring
+- **Debug tracing**: Enable `$SyntaxHighlightingDebugTrace` for diagnostic logging
+- **Safe mode**: Enable safe mode with reduced keymap for compatibility
+
+Flags will be persisted to your user-scope environment when you install or update the module.
 
 ### Cleanup Options
 
