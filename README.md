@@ -60,6 +60,7 @@ Import-Module .\pwsh-syntax-highlighting.psd1 -Force
 This fork of pwsh-syntax-highlighting includes several enhancements over the original:
 
 ### Core Improvements
+
 - **Command validation caching**: LRU cache (512 entries, 5s TTL) for expensive `Get-Command` lookups
 - **Adaptive throttling**: Render throttling (30ms minimum interval) with zero-delay paths for fast keys (arrows, tab, etc.)
 - **Safe mode**: Optional reduced-risk keymap via `PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE=1`
@@ -67,12 +68,14 @@ This fork of pwsh-syntax-highlighting includes several enhancements over the ori
 - **Telemetry & diagnostics**: Optional metrics (`$SyntaxHighlightingMetrics`) and debug tracing (`$SyntaxHighlightingDebugTrace`)
 
 ### Performance Optimizations
+
 - Command lookup skipped for very long inputs (configurable via `PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH`)
 - Long command token lookup disabled or rate-limited (configurable via `PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH`)
 - Render signature tracking prevents redundant repaints for unchanged buffer state
 - Best-effort diagnostics that cannot break key handlers or input processing
 
 ### Hardening
+
 - Preflight checks validate PSReadLine availability and required methods
 - Key handler registration wrapped in try/catch to prevent uninstall failures
 - Graceful fallback to degraded mode instead of hard failures
@@ -80,6 +83,7 @@ This fork of pwsh-syntax-highlighting includes several enhancements over the ori
 ## Known Limitations
 
 ### Right-Click Paste in Windows Terminal
+
 Right-click paste is a built-in Windows Terminal feature that bypasses PowerShell's PSReadLine key handler system. This means:
 
 - **Keyboard paste** (`Ctrl+V`, `Shift+Insert`) will trigger syntax highlighting immediately
@@ -111,6 +115,7 @@ Type commands directly in the prompt. The first command token is highlighted as 
 This module is inspired by and optimized using principles from [zsh-syntax-highlighting](https://github.com/zsh-users/zsh-syntax-highlighting):
 
 ### Key Optimizations
+
 1. **Command Resolution Caching**: Expensive `Get-Command` lookups are cached with a 5-second TTL and LRU eviction to prevent repeated lookups for the same commands during typical usage patterns.
 
 2. **Adaptive Throttling**: Render operations are throttled to a 30ms minimum interval for most keys, but zero-delay paths are maintained for fast navigation keys (arrows, tab) to keep the UX responsive.
@@ -122,7 +127,9 @@ This module is inspired by and optimized using principles from [zsh-syntax-highl
 5. **Error Budgeting**: Instead of failing hard on render errors, the module tracks errors and automatically downgrades to degraded mode after a configurable threshold, allowing graceful degradation under stress.
 
 ### Future Performance Enhancements
+
 Planned optimizations inspired by zsh-syntax-highlighting's architecture:
+
 - Pluggable highlighter system to allow users to enable/disable specific highlighting rules
 - Async/background command validation via background jobs  
 - Incremental token painting (only repaint changed tokens, not entire buffer)
