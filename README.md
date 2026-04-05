@@ -46,19 +46,7 @@ The menu supports:
 - Automatic profile autoload
 - Uninstall and profile cleanup
 
-### Option B: Direct one-liner install (non-interactive)
-
-```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1'))) -Install
-```
-
-### Option C: Direct one-liner uninstall (non-interactive)
-
-```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1'))) -Uninstall
-```
-
-### Option D: Local dev import (when you already have the folder)
+### Option B: Local dev import (when you already have the folder)
 
 ```powershell
 Set-Location '<repo-root>'

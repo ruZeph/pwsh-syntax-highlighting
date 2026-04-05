@@ -1,3 +1,22 @@
+<#
+.SYNOPSIS
+    Bootstrap installer for pwsh-syntax-highlighting module.
+.DESCRIPTION
+    Downloads and installs pwsh-syntax-highlighting from GitHub to the current user's module path.
+    Supports interactive menu, direct install, and direct uninstall modes.
+.PARAMETER Install
+    If specified, install the module without prompting.
+.PARAMETER Uninstall
+    If specified, uninstall the module without prompting.
+.PARAMETER NoProfileUpdate
+    If specified, skip adding autoload line to PowerShell profile.
+.PARAMETER RepoOwner
+    GitHub repository owner; defaults to 'ruZeph'.
+.PARAMETER RepoName
+    GitHub repository name; defaults to 'pwsh-syntax-highlighting'.
+.PARAMETER Branch
+    Git branch to download; defaults to 'main'.
+#>
 [CmdletBinding()]
 param(
     [switch]$Install,
@@ -68,13 +87,19 @@ function Remove-ProfileImport {
         return
     }
 
-    $pattern = 'Import-Module\s+[''\"]?' + [regex]::Escape($moduleName) + '[''\"]?'
-    $lines = Get-Content -LiteralPath $profilePath
-    $filtered = $lines | Where-Object {
-        $_ -notmatch $pattern
+    [string[]]$lines = @(Get-Content -LiteralPath $profilePath -ErrorAction SilentlyContinue)
+    if ($null -eq $lines -or $lines.Count -eq 0) {
+        return
     }
 
-    Set-Content -LiteralPath $profilePath -Value $filtered
+    $escapedModuleName = [regex]::Escape($moduleName)
+    $pattern = "Import-Module\s+['\`"]?$escapedModuleName['\`"]?"
+    [string[]]$filtered = @($lines | Where-Object { $_ -notmatch $pattern })
+
+    if ($filtered.Count -gt 0) {
+        Set-Content -LiteralPath $profilePath -Value $filtered -ErrorAction SilentlyContinue
+    }
+
     Write-Good "Removed module autoload entries from profile: $profilePath"
 }
 
@@ -101,8 +126,10 @@ function Install-FromZip {
         New-Item -Path $moduleRoot -ItemType Directory -Force | Out-Null
     }
 
-    Get-ChildItem -LiteralPath $moduleRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force
+    Get-ChildItem -LiteralPath $moduleRoot -Force -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    $null = Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force
 
     Remove-Module $moduleName -ErrorAction SilentlyContinue
     Import-Module $moduleName -Force
@@ -138,10 +165,22 @@ function Show-Menu {
 
     $choice = Read-Host 'Select an option'
     switch -Regex ($choice) {
-        '^(1|i|install)$' { Install-FromZip; break }
-        '^(2|u|uninstall)$' { Uninstall-ModuleLocal; break }
-        '^(q|quit)$' { Write-Info 'No changes made.'; break }
-        default { Write-WarnMsg 'Invalid selection. No changes made.'; break }
+        '^(1|i|install)$' {
+            Install-FromZip
+            break
+        }
+        '^(2|u|uninstall)$' {
+            Uninstall-ModuleLocal
+            break
+        }
+        '^(q|quit)$' {
+            Write-Info 'No changes made.'
+            break
+        }
+        default {
+            Write-WarnMsg 'Invalid selection. No changes made.'
+            break
+        }
     }
 }
 
