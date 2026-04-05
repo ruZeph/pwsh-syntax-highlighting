@@ -12,7 +12,7 @@
     RootModule        = '.\src\pwsh-syntax-highlighting.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '2.0.3'
+    ModuleVersion     = '1.0.0'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()

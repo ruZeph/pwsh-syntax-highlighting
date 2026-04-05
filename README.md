@@ -2,7 +2,7 @@
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2.0.3-blue)](#installation)
+[![Version](https://img.shields.io/badge/Version-1.0.0-blue)](#installation)
 [![Fork](https://img.shields.io/badge/Fork-digitalguy99%2Fpwsh--syntax--highlighting-181717?logo=github)](https://github.com/digitalguy99/pwsh-syntax-highlighting)
 [![PSGallery](https://img.shields.io/badge/PSGallery-Not%20Published-lightgrey)](#installation)
 
@@ -72,7 +72,7 @@ irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scri
 # - Update recommendation when an upgrade is available
 ```
 
-**Current version**: 2.0.3
+**Current version**: 1.0.0
 
 To see what's new, check the [repository changelog](https://github.com/ruZeph/pwsh-syntax-highlighting/releases).
 

@@ -38,7 +38,7 @@ $moduleName = 'pwsh-syntax-highlighting'
 $profileImportLine = "try { Import-Module '$moduleName' } catch { }"
 $moduleRoot = Join-Path (Join-Path $HOME 'Documents\PowerShell\Modules') $moduleName
 $profileBackupExt = '.pwsh-syntax-highlighting.backup'
-$localVersion = '2.0.3'
+$localVersion = '1.0.0'
 
 # Runtime flag configuration state
 $script:EnableMetrics = $false
