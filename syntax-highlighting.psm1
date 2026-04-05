@@ -93,21 +93,28 @@ $script:AddDebugTraceEvent = {
         [string]$TokenText = ''
     )
 
-    if (-not $script:EnableDebugTrace) {
+    try {
+        if (-not $script:EnableDebugTrace) {
+            return
+        }
+
+        if ($script:DebugTrace.Count -ge 300) {
+            $script:DebugTrace.RemoveAt(0)
+        }
+
+        $script:DebugTrace.Add([pscustomobject]@{
+            Timestamp = (Get-Date)
+            Reason = $Reason
+            Key = if ($null -eq $Key) { 'NoName' } else { [string]$Key }
+            TokenText = $TokenText
+        })
+
+        # Keep debug plumbing best-effort; never let tracing break key handlers.
+        $global:SyntaxHighlightingDebugTrace = [object[]]$script:DebugTrace.ToArray()
+    }
+    catch {
         return
     }
-
-    if ($script:DebugTrace.Count -ge 300) {
-        $script:DebugTrace.RemoveAt(0)
-    }
-
-    $script:DebugTrace.Add([pscustomobject]@{
-        Timestamp = (Get-Date)
-        Reason = $Reason
-        Key = if ($null -eq $Key) { 'NoName' } else { [string]$Key }
-        TokenText = $TokenText
-    })
-    $global:SyntaxHighlightingDebugTrace = @($script:DebugTrace)
 }.GetNewClosure()
 
 $script:RenderAction = {
