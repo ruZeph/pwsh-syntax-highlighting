@@ -148,7 +148,7 @@ function Test-ModuleLoaded {
     return $null -ne (Get-Module -Name $moduleName -ErrorAction SilentlyContinue)
 }
 
-function Ensure-ProfileDirectory {
+function Initialize-ProfileDirectory {
     param([string]$ProfilePath)
     
     $profileDir = Split-Path -Parent $profilePath
@@ -183,8 +183,8 @@ function Add-ProfileImport {
 
     $profilePath = $PROFILE.CurrentUserCurrentHost
     
-    # Ensure directory and file exist
-    Ensure-ProfileDirectory -ProfilePath $profilePath
+    # Initialize profile directory and file if needed
+    Initialize-ProfileDirectory -ProfilePath $profilePath
 
     # Check write permission
     if (-not (Test-WritePermission -Path (Split-Path -Parent $profilePath))) {
