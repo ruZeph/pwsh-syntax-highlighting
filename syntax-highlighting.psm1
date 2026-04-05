@@ -32,6 +32,7 @@ $script:RenderAction = {
             [System.ConsoleKey]::LeftArrow,
             [System.ConsoleKey]::RightArrow,
             [System.ConsoleKey]::Tab,
+            [System.ConsoleKey]::Spacebar,
             [System.ConsoleKey]::Delete,
             [System.ConsoleKey]::Backspace
         )) {
@@ -113,7 +114,8 @@ $script:RenderAction = {
 
     $color = if ($exists) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Red }
 
-    $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosY|$color"
+    $bufferLength = if ($ast -and $ast.Extent) { $ast.Extent.EndOffset } else { -1 }
+    $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$color"
     if ($signature -eq $script:LastRenderSignature) {
         if ($script:EnableTelemetry) {
             $script:Perf.SkippedUnchanged++
