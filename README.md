@@ -2,6 +2,7 @@
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-2.0.3-blue)](#installation)
 [![Fork](https://img.shields.io/badge/Fork-digitalguy99%2Fpwsh--syntax--highlighting-181717?logo=github)](https://github.com/digitalguy99/pwsh-syntax-highlighting)
 [![PSGallery](https://img.shields.io/badge/PSGallery-Not%20Published-lightgrey)](#installation)
 
@@ -56,6 +57,24 @@ Set-Location '<repo-root>'
 Remove-Module pwsh-syntax-highlighting -ErrorAction Ignore
 Import-Module .\pwsh-syntax-highlighting.psd1 -Force
 ```
+
+## Version Management
+
+The installer automatically checks for newer versions when you run the update command:
+
+```powershell
+# Run the installer to check available versions
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/install.ps1' | iex
+
+# The menu will show:
+# - Current installed version (if any)
+# - Available version from remote (if newer)
+# - Update recommendation when an upgrade is available
+```
+
+**Current version**: 2.0.3
+
+To see what's new, check the [repository changelog](https://github.com/ruZeph/pwsh-syntax-highlighting/releases).
 
 ## Features in This Fork
 

@@ -38,6 +38,7 @@ $moduleName = 'pwsh-syntax-highlighting'
 $profileImportLine = "try { Import-Module '$moduleName' } catch { }"
 $moduleRoot = Join-Path (Join-Path $HOME 'Documents\PowerShell\Modules') $moduleName
 $profileBackupExt = '.pwsh-syntax-highlighting.backup'
+$localVersion = '2.0.3'
 
 # Runtime flag configuration state
 $script:EnableMetrics = $false
@@ -129,6 +130,38 @@ function Get-UserConfirmation {
     
     $choice = Read-Host "Proceed?"
     return $choice -match '^(y|yes)$'
+}
+
+function Get-RemoteVersion {
+    $manifestUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/pwsh-syntax-highlighting.psd1"
+    try {
+        Write-Info "Checking remote version..."
+        $manifestContent = Invoke-WebRequest -Uri $manifestUrl -ErrorAction Stop -TimeoutSec 5 | Select-Object -ExpandProperty Content
+        if ($manifestContent -match "ModuleVersion\s*=\s*['\"]([^'\"]+)['\"]")
+        {
+            return $matches[1]
+        }
+        return $null
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-UpdateAvailable {
+    $remoteVersion = Get-RemoteVersion
+    if ($null -eq $remoteVersion) {
+        return $false
+    }
+    
+    $localVer = [version]$localVersion
+    $remoteVer = [version]$remoteVersion
+    
+    if ($remoteVer -gt $localVer) {
+        Write-WarnMsg "Newer version available: $remoteVersion (currently installed: $localVersion)"
+        return $true
+    }
+    return $false
 }
 
 function Test-InstallationExists {
@@ -467,6 +500,11 @@ function Start-Menu {
     while ($true) {
         Write-Host ''
         Write-Host 'pwsh-syntax-highlighting installer' -ForegroundColor Magenta
+        Write-Host "Version: $localVersion" -ForegroundColor Cyan
+        
+        # Check for updates (non-blocking)
+        $updateAvailable = Test-UpdateAvailable
+        
         Write-Host '1) Install to current user + autoload in profile'
         Write-Host '2) Update existing installation'
         Write-Host '3) Configure runtime flags'
