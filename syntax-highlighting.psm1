@@ -1,18 +1,71 @@
 $global:lastRender = Get-Date
 
+$script:CommandLookupCache = @{}
+$script:CommandLookupOrder = [System.Collections.Generic.Queue[string]]::new()
+$script:CommandCacheMaxSize = 512
+$script:CommandCacheTtlMs = 5000
+
+$script:LastRenderSignature = ''
+$script:EnableTelemetry = ($env:PWSH_SYNTAX_HIGHLIGHTING_METRICS -eq '1')
+$script:Perf = [ordered]@{
+    RenderCalls = 0
+    Throttled = 0
+    NoToken = 0
+    SkippedUnchanged = 0
+    CacheHit = 0
+    CacheMiss = 0
+    PaintOps = 0
+    PaintChars = 0
+    NoColorWrite = 0
+    TotalRenderMs = 0.0
+}
+
 $script:RenderAction = {
-    if (((Get-Date) - $global:lastRender).TotalMilliseconds -le 20) {
+    param([System.ConsoleKeyInfo]$KeyInfo)
+
+    if ($script:EnableTelemetry) { $script:Perf.RenderCalls++ }
+
+    $minRenderIntervalMs = 30
+    if ($KeyInfo -and $KeyInfo.Key -in @(
+            [System.ConsoleKey]::UpArrow,
+            [System.ConsoleKey]::DownArrow,
+            [System.ConsoleKey]::LeftArrow,
+            [System.ConsoleKey]::RightArrow,
+            [System.ConsoleKey]::Tab,
+            [System.ConsoleKey]::Delete,
+            [System.ConsoleKey]::Backspace
+        )) {
+        $minRenderIntervalMs = 0
+    }
+
+    if (((Get-Date) - $global:lastRender).TotalMilliseconds -le $minRenderIntervalMs) {
+        if ($script:EnableTelemetry) { $script:Perf.Throttled++ }
         return
+    }
+
+    $perfStart = $null
+    if ($script:EnableTelemetry) {
+        $perfStart = [System.Diagnostics.Stopwatch]::StartNew()
     }
 
     $ast = $null; $tokens = $null; $errors = $null; $cursor = $null
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$ast, [ref]$tokens, [ref]$errors, [ref]$cursor)
     if (-not $tokens -or $tokens.Count -eq 0 -or -not $tokens[0]) {
+        if ($script:EnableTelemetry) {
+            $script:Perf.NoToken++
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        }
         return
     }
 
     $token = $tokens[0]
-    if ([string]::IsNullOrEmpty($token.Text.Trim()) -or $token.Text -match "\[|\]") {
+    $tokenText = [string]$token.Text
+    if ([string]::IsNullOrWhiteSpace($tokenText) -or $tokenText.Contains('[') -or $tokenText.Contains(']')) {
+        if ($script:EnableTelemetry) {
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        }
         return
     }
 
@@ -21,17 +74,56 @@ $script:RenderAction = {
     $cursorPosY = $host.UI.RawUI.CursorPosition.Y
     [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
 
-    $tokenLength = ($token.Extent.EndOffset - $token.Extent.StartOffset)
+    $tokenStartOffset = ($token.Extent.StartOffset)
+    $tokenLength = ($token.Extent.EndOffset - $tokenStartOffset)
     if ($tokenLength -le 0) {
+        if ($script:EnableTelemetry) {
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        }
         return
     }
 
-    $color = "Red"
-    if (Get-Command $token.Text -ErrorAction Ignore) {
-        $color = "Green"
+    $nowTicks = [Environment]::TickCount64
+    $cacheEntry = $script:CommandLookupCache[$tokenText]
+    if ($cacheEntry -and (($nowTicks - [int64]$cacheEntry.Tick) -lt $script:CommandCacheTtlMs)) {
+        if ($script:EnableTelemetry) { $script:Perf.CacheHit++ }
+        $exists = [bool]$cacheEntry.Exists
+    }
+    else {
+        if ($cacheEntry) {
+            $script:CommandLookupCache.Remove($tokenText) | Out-Null
+        }
+
+        if ($script:EnableTelemetry) { $script:Perf.CacheMiss++ }
+        $exists = [bool](Get-Command -Name $tokenText -ErrorAction Ignore)
+        $script:CommandLookupCache[$tokenText] = @{
+            Exists = $exists
+            Tick = $nowTicks
+        }
+        $script:CommandLookupOrder.Enqueue($tokenText)
+
+        while ($script:CommandLookupOrder.Count -gt $script:CommandCacheMaxSize) {
+            $oldest = $script:CommandLookupOrder.Dequeue()
+            if ($script:CommandLookupCache.ContainsKey($oldest)) {
+                $script:CommandLookupCache.Remove($oldest) | Out-Null
+            }
+        }
     }
 
-    $sX = ($cursorPosX + $token.Extent.StartOffset)
+    $color = if ($exists) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Red }
+
+    $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosY|$color"
+    if ($signature -eq $script:LastRenderSignature) {
+        if ($script:EnableTelemetry) {
+            $script:Perf.SkippedUnchanged++
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        }
+        return
+    }
+
+    $sX = ($cursorPosX + $tokenStartOffset)
     $Y = $cursorPosY
     $eX = ($sX + $tokenLength)
     $nextLine = $false
@@ -48,15 +140,27 @@ $script:RenderAction = {
 
         $finalRec = New-Object System.Management.Automation.Host.Rectangle($sX, $Y, ($scanXEnd - 1), $Y)
         $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
+        $needsWrite = $false
         for ($xPosition = 0; $xPosition -lt ($scanXEnd - $sX); $xPosition++) {
             $bufferItem = $finalBuf.GetValue(0, $xPosition)
-            $bufferItem.ForegroundColor = $color
-            $finalBuf.SetValue($bufferItem, 0, $xPosition)
+            if ($bufferItem.ForegroundColor -ne $color) {
+                $bufferItem.ForegroundColor = $color
+                $finalBuf.SetValue($bufferItem, 0, $xPosition)
+                $needsWrite = $true
+                if ($script:EnableTelemetry) { $script:Perf.PaintChars++ }
+            }
             $painted++
         }
 
-        $coords = New-Object System.Management.Automation.Host.Coordinates $sX, $Y
-        $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
+        if ($needsWrite) {
+            $coords = New-Object System.Management.Automation.Host.Coordinates $sX, $Y
+            $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
+            if ($script:EnableTelemetry) { $script:Perf.PaintOps++ }
+        }
+        elseif ($script:EnableTelemetry) {
+            $script:Perf.NoColorWrite++
+        }
+
         if ($nextLine) {
             $sX = 0
             $Y++
@@ -64,7 +168,14 @@ $script:RenderAction = {
         }
     }
 
+    $script:LastRenderSignature = $signature
     $global:lastRender = Get-Date
+
+    if ($script:EnableTelemetry) {
+        $perfStart.Stop()
+        $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
+    }
 }.GetNewClosure()
 
 $printableChars = [char[]](0x20..0x7e + 0xa0..0xff)
@@ -86,6 +197,10 @@ $ExecutionContext.SessionState.Module.OnRemove = {
     foreach ($entry in $functionKeyMap.GetEnumerator()) {
         Set-PSReadLineKeyHandler -Key $entry.Key -Function $entry.Value -ErrorAction SilentlyContinue
     }
+
+    if ($script:EnableTelemetry) {
+        $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
+    }
 }
 
 $renderAction = $script:RenderAction
@@ -103,7 +218,7 @@ $printableChars + "Tab" | ForEach-Object {
                 [Microsoft.PowerShell.PSConsoleReadLine]::TabCompleteNext($key)
             }
 
-            & $renderAction
+            & $renderAction $key
         }.GetNewClosure()
 }
 
@@ -120,6 +235,6 @@ foreach ($entry in $functionKeyMap.GetEnumerator()) {
         -ScriptBlock {
             param($key, $arg)
             $method.Invoke($null, @($key, $arg)) | Out-Null
-            & $renderAction
+            & $renderAction $key
         }.GetNewClosure()
 }
