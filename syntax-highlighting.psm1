@@ -31,6 +31,8 @@ $script:RenderAction = {
             [System.ConsoleKey]::DownArrow,
             [System.ConsoleKey]::LeftArrow,
             [System.ConsoleKey]::RightArrow,
+            [System.ConsoleKey]::Home,
+            [System.ConsoleKey]::End,
             [System.ConsoleKey]::Tab,
             [System.ConsoleKey]::Spacebar,
             [System.ConsoleKey]::Delete,
@@ -115,7 +117,8 @@ $script:RenderAction = {
     $color = if ($exists) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Red }
 
     $bufferLength = if ($ast -and $ast.Extent) { $ast.Extent.EndOffset } else { -1 }
-    $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$color"
+    $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
+    $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
     if ($signature -eq $script:LastRenderSignature) {
         if ($script:EnableTelemetry) {
             $script:Perf.SkippedUnchanged++
@@ -182,10 +185,14 @@ $script:RenderAction = {
 
 $printableChars = [char[]](0x20..0x7e + 0xa0..0xff)
 $functionKeyMap = @{
-    UpArrow   = "PreviousHistory"
+    UpArrow = "PreviousHistory"
     DownArrow = "NextHistory"
     RightArrow = "ForwardChar"
     LeftArrow = "BackwardChar"
+    Home = "BeginningOfLine"
+    End = "EndOfLine"
+    "Ctrl+RightArrow" = "NextWord"
+    "Ctrl+LeftArrow" = "BackwardWord"
     Backspace = "BackwardDeleteChar"
     Delete = "DeleteChar"
 }
