@@ -4,6 +4,61 @@ $script:CommandLookupCache = @{}
 $script:CommandLookupOrder = [System.Collections.Generic.Queue[string]]::new()
 $script:CommandCacheMaxSize = 512
 $script:CommandCacheTtlMs = 5000
+$script:MaxBufferLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH } else { 0 }
+$script:MaxCommandLookupLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH } else { 256 }
+
+$script:Styles = @{
+    ValidCommand = [System.ConsoleColor]::Green
+    InvalidCommand = [System.ConsoleColor]::Red
+}
+
+$script:Highlighters = @(
+    @{
+        Name = 'main-command'
+        Predicate = {
+            param($ctx)
+            -not [string]::IsNullOrWhiteSpace($ctx.TokenText) -and
+            -not $ctx.TokenText.Contains('[') -and
+            -not $ctx.TokenText.Contains(']')
+        }
+        Paint = {
+            param($ctx)
+
+            if ($script:MaxCommandLookupLength -gt 0 -and $ctx.TokenText.Length -gt $script:MaxCommandLookupLength) {
+                return $script:Styles.InvalidCommand
+            }
+
+            $nowTicks = [Environment]::TickCount64
+            $cacheEntry = $script:CommandLookupCache[$ctx.TokenText]
+            if ($cacheEntry -and (($nowTicks - [int64]$cacheEntry.Tick) -lt $script:CommandCacheTtlMs)) {
+                if ($script:EnableTelemetry) { $script:Perf.CacheHit++ }
+                return (if ([bool]$cacheEntry.Exists) { $script:Styles.ValidCommand } else { $script:Styles.InvalidCommand })
+            }
+
+            if ($cacheEntry) {
+                $script:CommandLookupCache.Remove($ctx.TokenText) | Out-Null
+            }
+
+            if ($script:EnableTelemetry) { $script:Perf.CacheMiss++ }
+            $exists = [bool](Get-Command -Name $ctx.TokenText -ErrorAction Ignore)
+            $script:CommandLookupCache[$ctx.TokenText] = @{
+                Exists = $exists
+                Tick = $nowTicks
+            }
+            $script:CommandLookupOrder.Enqueue($ctx.TokenText)
+
+            while ($script:CommandLookupOrder.Count -gt $script:CommandCacheMaxSize) {
+                $oldest = $script:CommandLookupOrder.Dequeue()
+                if ($script:CommandLookupCache.ContainsKey($oldest)) {
+                    $script:CommandLookupCache.Remove($oldest) | Out-Null
+                }
+            }
+
+            if ($exists) { return $script:Styles.ValidCommand }
+            return $script:Styles.InvalidCommand
+        }
+    }
+)
 
 $script:LastRenderSignature = ''
 $script:EnableTelemetry = ($env:PWSH_SYNTAX_HIGHLIGHTING_METRICS -eq '1')
@@ -68,7 +123,7 @@ $script:RenderAction = {
 
     $token = $tokens[0]
     $tokenText = [string]$token.Text
-    if ([string]::IsNullOrWhiteSpace($tokenText) -or $tokenText.Contains('[') -or $tokenText.Contains(']')) {
+    if ([string]::IsNullOrWhiteSpace($tokenText)) {
         if ($script:EnableTelemetry) {
             $perfStart.Stop()
             $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
@@ -95,36 +150,60 @@ $script:RenderAction = {
         return
     }
 
-    $nowTicks = [Environment]::TickCount64
-    $cacheEntry = $script:CommandLookupCache[$tokenText]
-    if ($cacheEntry -and (($nowTicks - [int64]$cacheEntry.Tick) -lt $script:CommandCacheTtlMs)) {
-        if ($script:EnableTelemetry) { $script:Perf.CacheHit++ }
-        $exists = [bool]$cacheEntry.Exists
-    }
-    else {
-        if ($cacheEntry) {
-            $script:CommandLookupCache.Remove($tokenText) | Out-Null
-        }
-
-        if ($script:EnableTelemetry) { $script:Perf.CacheMiss++ }
-        $exists = [bool](Get-Command -Name $tokenText -ErrorAction Ignore)
-        $script:CommandLookupCache[$tokenText] = @{
-            Exists = $exists
-            Tick = $nowTicks
-        }
-        $script:CommandLookupOrder.Enqueue($tokenText)
-
-        while ($script:CommandLookupOrder.Count -gt $script:CommandCacheMaxSize) {
-            $oldest = $script:CommandLookupOrder.Dequeue()
-            if ($script:CommandLookupCache.ContainsKey($oldest)) {
-                $script:CommandLookupCache.Remove($oldest) | Out-Null
-            }
-        }
-    }
-
-    $color = if ($exists) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Red }
-
     $bufferLength = if ($ast -and $ast.Extent) { $ast.Extent.EndOffset } else { -1 }
+    if ($script:MaxBufferLength -gt 0 -and $bufferLength -gt $script:MaxBufferLength) {
+        if ($script:EnableTelemetry) {
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        }
+        return
+    }
+
+    $ctx = [pscustomobject]@{
+        Token = $token
+        TokenText = $tokenText
+        TokenStartOffset = $tokenStartOffset
+        TokenLength = $tokenLength
+        BufferLength = $bufferLength
+        CursorX = $cursorPosX
+        CursorY = $cursorPosY
+        Ast = $ast
+        Tokens = $tokens
+        Errors = $errors
+    }
+
+    $color = $null
+    foreach ($highlighter in $script:Highlighters) {
+        $useThis = $false
+        try {
+            $useThis = [bool](& $highlighter.Predicate $ctx)
+        }
+        catch {
+            continue
+        }
+
+        if (-not $useThis) { continue }
+
+        try {
+            $color = & $highlighter.Paint $ctx
+        }
+        catch {
+            $color = $null
+        }
+
+        if ($null -ne $color) {
+            break
+        }
+    }
+
+    if ($null -eq $color) {
+        if ($script:EnableTelemetry) {
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+        }
+        return
+    }
+
     $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
     $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
     if ($signature -eq $script:LastRenderSignature) {
