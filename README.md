@@ -138,7 +138,7 @@ irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scri
 
 The installer includes several safety checks:
 
-- **Confirmation prompts** for destructive operations (install, update, uninstall)
+- **Confirmation prompts** for destructive operations
 - **Profile backup** before modifications (saved as `.pwsh-syntax-highlighting.backup`)
 - **Write permission validation** before modifying files or directories
 - **Internet connectivity check** before attempting downloads
