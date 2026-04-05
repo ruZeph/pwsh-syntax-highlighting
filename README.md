@@ -3,6 +3,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Fork](https://img.shields.io/badge/Fork-digitalguy99%2Fpwsh--syntax--highlighting-181717?logo=github)](https://github.com/digitalguy99/pwsh-syntax-highlighting)
+[![PSGallery](https://img.shields.io/badge/PSGallery-Not%20Published-lightgrey)](#installation)
 
 Interactive syntax highlighting and command validation for PowerShell.
 
@@ -29,37 +30,35 @@ Inspired by zsh-syntax-highlighting: <https://github.com/zsh-users/zsh-syntax-hi
 
 ## Installation
 
-### Option A: Install from PowerShell Gallery (upstream package)
+This fork is currently not published to PowerShell Gallery.
 
-Use this if you want the published package quickly.
+### Option A: One-liner bootstrap script (no clone)
 
-```powershell
-Install-Module -Name pwsh-syntax-highlighting -Scope CurrentUser
-Import-Module pwsh-syntax-highlighting
-```
-
-Note: this typically installs the latest gallery release, which may track upstream rather than this fork.
-
-### Option B: Install from this fork without cloning
-
-Download a ZIP of the repo and install it as a local module.
+Run this to open an interactive installer menu.
 
 ```powershell
-$repoZip = Join-Path $env:TEMP 'pwsh-syntax-highlighting-main.zip'
-$extractRoot = Join-Path $env:TEMP 'pwsh-syntax-highlighting-main'
-$moduleRoot = Join-Path $HOME 'Documents/PowerShell/Modules/pwsh-syntax-highlighting'
-
-Invoke-WebRequest -Uri 'https://github.com/ruZeph/pwsh-syntax-highlighting/archive/refs/heads/main.zip' -OutFile $repoZip
-Remove-Item $extractRoot -Recurse -Force -ErrorAction Ignore
-Expand-Archive -Path $repoZip -DestinationPath $env:TEMP -Force
-
-New-Item -ItemType Directory -Path $moduleRoot -Force | Out-Null
-Copy-Item "$extractRoot/*" -Destination $moduleRoot -Recurse -Force
-
-Import-Module pwsh-syntax-highlighting -Force
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | iex
 ```
 
-### Option C: Local dev import (when you already have the folder)
+The menu supports:
+
+- Install to current user module path
+- Automatic profile autoload
+- Uninstall and profile cleanup
+
+### Option B: Direct one-liner install (non-interactive)
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1'))) -Install
+```
+
+### Option C: Direct one-liner uninstall (non-interactive)
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1'))) -Uninstall
+```
+
+### Option D: Local dev import (when you already have the folder)
 
 ```powershell
 Set-Location '<repo-root>'
@@ -114,6 +113,7 @@ Run micro-benchmark only:
 |  |- perf-and-hardening.md
 |- scripts/
 |  |- benchmark-render.ps1
+|  |- bootstrap-installer.ps1
 |  |- manual-test-setup-env.ps1
 |  |- validate-gate.ps1
 |- src/

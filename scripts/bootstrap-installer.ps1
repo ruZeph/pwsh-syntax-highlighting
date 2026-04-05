@@ -1,0 +1,160 @@
+[CmdletBinding()]
+param(
+    [switch]$Install,
+    [switch]$Uninstall,
+    [switch]$NoProfileUpdate,
+    [ValidateNotNullOrEmpty()]
+    [string]$RepoOwner = 'ruZeph',
+    [ValidateNotNullOrEmpty()]
+    [string]$RepoName = 'pwsh-syntax-highlighting',
+    [ValidateNotNullOrEmpty()]
+    [string]$Branch = 'main'
+)
+
+$ErrorActionPreference = 'Stop'
+$moduleName = 'pwsh-syntax-highlighting'
+$profileImportLine = "Import-Module '$moduleName' -ErrorAction SilentlyContinue"
+$moduleRoot = Join-Path (Join-Path $HOME 'Documents\PowerShell\Modules') $moduleName
+
+function Write-Info {
+    param([string]$Message)
+    Write-Host "[INFO] $Message" -ForegroundColor Cyan
+}
+
+function Write-Good {
+    param([string]$Message)
+    Write-Host "[OK]   $Message" -ForegroundColor Green
+}
+
+function Write-WarnMsg {
+    param([string]$Message)
+    Write-Host "[WARN] $Message" -ForegroundColor Yellow
+}
+
+function Ensure-ProfileImport {
+    if ($NoProfileUpdate) {
+        Write-Info 'Skipping profile update due to -NoProfileUpdate.'
+        return
+    }
+
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    $profileDir = Split-Path -Parent $profilePath
+
+    if (-not (Test-Path -LiteralPath $profileDir)) {
+        New-Item -Path $profileDir -ItemType Directory -Force | Out-Null
+    }
+
+    if (-not (Test-Path -LiteralPath $profilePath)) {
+        New-Item -Path $profilePath -ItemType File -Force | Out-Null
+    }
+
+    $profileContent = Get-Content -LiteralPath $profilePath -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $profileContent) {
+        $profileContent = ''
+    }
+
+    if ($profileContent -notmatch [regex]::Escape($profileImportLine)) {
+        Add-Content -LiteralPath $profilePath -Value "`n$profileImportLine"
+        Write-Good "Added module autoload to profile: $profilePath"
+    }
+    else {
+        Write-Info 'Profile already contains autoload line.'
+    }
+}
+
+function Remove-ProfileImport {
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    if (-not (Test-Path -LiteralPath $profilePath)) {
+        return
+    }
+
+    $pattern = 'Import-Module\s+[''\"]?' + [regex]::Escape($moduleName) + '[''\"]?'
+    $lines = Get-Content -LiteralPath $profilePath
+    $filtered = $lines | Where-Object {
+        $_ -notmatch $pattern
+    }
+
+    Set-Content -LiteralPath $profilePath -Value $filtered
+    Write-Good "Removed module autoload entries from profile: $profilePath"
+}
+
+function Install-FromZip {
+    $zipUrl = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Branch.zip"
+    $zipPath = Join-Path $env:TEMP "$RepoName-$Branch.zip"
+    $extractBase = Join-Path $env:TEMP "$RepoName-$Branch"
+    $expandedRoot = Join-Path $extractBase "$RepoName-$Branch"
+
+    Write-Info "Downloading: $zipUrl"
+    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+
+    if (Test-Path -LiteralPath $extractBase) {
+        Remove-Item -LiteralPath $extractBase -Recurse -Force
+    }
+
+    Expand-Archive -Path $zipPath -DestinationPath $extractBase -Force
+
+    if (-not (Test-Path -LiteralPath $expandedRoot)) {
+        throw "Expanded folder not found: $expandedRoot"
+    }
+
+    if (-not (Test-Path -LiteralPath $moduleRoot)) {
+        New-Item -Path $moduleRoot -ItemType Directory -Force | Out-Null
+    }
+
+    Get-ChildItem -LiteralPath $moduleRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force
+
+    Remove-Module $moduleName -ErrorAction SilentlyContinue
+    Import-Module $moduleName -Force
+
+    Ensure-ProfileImport
+
+    Write-Good "Installed $moduleName to: $moduleRoot"
+    Write-Good 'Module imported for current session.'
+}
+
+function Uninstall-ModuleLocal {
+    Remove-Module $moduleName -ErrorAction SilentlyContinue
+
+    if (Test-Path -LiteralPath $moduleRoot) {
+        Remove-Item -LiteralPath $moduleRoot -Recurse -Force
+        Write-Good "Removed module directory: $moduleRoot"
+    }
+    else {
+        Write-Info "Module directory not found: $moduleRoot"
+    }
+
+    Remove-ProfileImport
+    Write-Good "Uninstalled $moduleName from current user scope."
+}
+
+function Show-Menu {
+    Write-Host ''
+    Write-Host 'pwsh-syntax-highlighting bootstrap' -ForegroundColor Magenta
+    Write-Host '1) Install to current user + autoload in profile'
+    Write-Host '2) Uninstall from current user + remove profile autoload'
+    Write-Host 'Q) Quit'
+    Write-Host ''
+
+    $choice = Read-Host 'Select an option'
+    switch -Regex ($choice) {
+        '^(1|i|install)$' { Install-FromZip; break }
+        '^(2|u|uninstall)$' { Uninstall-ModuleLocal; break }
+        '^(q|quit)$' { Write-Info 'No changes made.'; break }
+        default { Write-WarnMsg 'Invalid selection. No changes made.'; break }
+    }
+}
+
+if ($Install -and $Uninstall) {
+    throw 'Use either -Install or -Uninstall, not both.'
+}
+
+if ($Install) {
+    Install-FromZip
+}
+elseif ($Uninstall) {
+    Uninstall-ModuleLocal
+}
+else {
+    Show-Menu
+}
