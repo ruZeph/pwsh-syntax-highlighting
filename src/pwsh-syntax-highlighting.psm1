@@ -71,6 +71,7 @@ $script:EnableDebugTrace = (-not $script:SafeMode) -and ($env:PWSH_SYNTAX_HIGHLI
 $script:RenderErrorBudget = if ($env:PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET } else { 5 }
 $script:DegradedMode = $false
 $script:DebugTrace = New-Object System.Collections.Generic.List[object]
+$script:PreviousCommandValidationHandler = $null
 $script:Preflight = [ordered]@{
     Passed                   = $false
     HostSupportsRawUI        = $false
@@ -197,7 +198,11 @@ $script:RenderAction = {
         }
 
         $minRenderIntervalMs = 30
-        if ($normalizedKeyInfo -and $normalizedKeyInfo.Key -in @(
+        if (-not $normalizedKeyInfo) {
+            # Callback-driven updates (e.g., bracketed/right-click paste) should not be throttled.
+            $minRenderIntervalMs = 0
+        }
+        elseif ($normalizedKeyInfo.Key -in @(
                 [System.ConsoleKey]::UpArrow,
                 [System.ConsoleKey]::DownArrow,
                 [System.ConsoleKey]::LeftArrow,
@@ -328,7 +333,10 @@ $script:RenderAction = {
         $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
         $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
         $forceRepaint = $false
-        if ($normalizedKeyInfo -and $normalizedKeyInfo.Key -in @(
+        if (-not $normalizedKeyInfo) {
+            $forceRepaint = $true
+        }
+        elseif ($normalizedKeyInfo.Key -in @(
                 [System.ConsoleKey]::Spacebar,
                 [System.ConsoleKey]::UpArrow,
                 [System.ConsoleKey]::DownArrow,
@@ -435,6 +443,7 @@ $functionKeyMap = @(
     @{ Key = 'Ctrl+a'; Function = 'BeginningOfLine' }
     @{ Key = 'Ctrl+e'; Function = 'EndOfLine' }
     @{ Key = 'Ctrl+v'; Function = 'Paste' }
+    @{ Key = 'Ctrl+Shift+v'; Function = 'Paste' }
     @{ Key = 'Shift+Insert'; Function = 'Paste' }
     @{ Key = 'Shift+Tab'; Function = 'TabCompletePrevious' }
     @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
@@ -448,6 +457,7 @@ if ($script:SafeMode) {
         @{ Key = 'RightArrow'; Function = 'ForwardChar' }
         @{ Key = 'LeftArrow'; Function = 'BackwardChar' }
         @{ Key = 'Ctrl+v'; Function = 'Paste' }
+        @{ Key = 'Ctrl+Shift+v'; Function = 'Paste' }
         @{ Key = 'Shift+Insert'; Function = 'Paste' }
         @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
         @{ Key = 'Delete'; Function = 'DeleteChar' }
@@ -468,12 +478,44 @@ $ExecutionContext.SessionState.Module.OnRemove = {
         Set-PSReadLineKeyHandler -Key $entry.Key -Function $entry.Value -ErrorAction SilentlyContinue
     }
 
+    try {
+        Set-PSReadLineOption -CommandValidationHandler $script:PreviousCommandValidationHandler
+    }
+    catch {
+    }
+
     & $script:PublishMetrics
 }
 
 $renderAction = $script:RenderAction
 if (-not $script:Preflight.Passed) {
     return
+}
+
+try {
+    $script:PreviousCommandValidationHandler = (Get-PSReadLineOption).CommandValidationHandler
+}
+catch {
+    $script:PreviousCommandValidationHandler = $null
+}
+
+try {
+    Set-PSReadLineOption -CommandValidationHandler {
+        param($ast)
+
+        try {
+            if ($script:PreviousCommandValidationHandler) {
+                & $script:PreviousCommandValidationHandler $ast
+            }
+        }
+        catch {
+        }
+
+        & $renderAction $null
+    }.GetNewClosure()
+}
+catch {
+    if ($script:EnableTelemetry) { $script:Perf.RegistrationSkipped++ }
 }
 
 $printableChars + "Tab" | ForEach-Object {

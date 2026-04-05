@@ -6,18 +6,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+Import-Module PSReadLine -ErrorAction Stop
+
 $moduleName = 'pwsh-syntax-highlighting'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $moduleManifest = Join-Path $repoRoot 'pwsh-syntax-highlighting.psd1'
 $env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG = '1'
 $keys = @('UpArrow', 'DownArrow', 'RightArrow', 'LeftArrow', 'Backspace', 'Delete')
 $expectedDefault = @{
-    UpArrow = 'PreviousHistory'
-    DownArrow = 'NextHistory'
+    UpArrow    = 'PreviousHistory'
+    DownArrow  = 'NextHistory'
     RightArrow = 'ForwardChar'
-    LeftArrow = 'BackwardChar'
-    Backspace = 'BackwardDeleteChar'
-    Delete = 'DeleteChar'
+    LeftArrow  = 'BackwardChar'
+    Backspace  = 'BackwardDeleteChar'
+    Delete     = 'DeleteChar'
 }
 
 function Assert-Equal {
@@ -94,6 +96,12 @@ foreach ($k in $keys) {
 Assert-Equal -Name 'Custom key binding (Tab)' -Actual (Get-KeyFunction -Key 'Tab') -Expected 'ValidatePrograms'
 Write-Host "  PASS: custom key bindings are active"
 
+$handlers = Get-PSReadLineKeyHandler
+$boundKeys = @($handlers.Key)
+foreach ($pasteKey in @('Ctrl+v', 'Shift+Insert')) {
+    Assert-True -Name "Paste key binding ($pasteKey)" -Condition ($boundKeys -contains $pasteKey)
+}
+Assert-True -Name 'CommandValidationHandler should be set for paste fallback' -Condition ($null -ne (Get-PSReadLineOption).CommandValidationHandler)
 Write-Host "[3/4] Validating render action smoke test..."
 $module = Get-Module $moduleName -ErrorAction Stop
 $renderResult = & $module { & $script:RenderAction; 'render-ok' }
@@ -112,6 +120,26 @@ $throttleCheck = & $module {
 }
 Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck) -Expected '0'
 Write-Host "  PASS: immediate-key throttle bypass works"
+
+$callbackThrottleCheck = & $module {
+    $script:EnableTelemetry = $true
+    $script:Perf.Throttled = 0
+
+    $script:LastRenderTick = [Environment]::TickCount64
+    $callback = (Get-PSReadLineOption).CommandValidationHandler
+    if ($null -ne $callback) {
+        if ($callback -is [scriptblock]) {
+            & $callback $null
+        }
+        else {
+            $callback.Invoke($null)
+        }
+    }
+
+    [int]$script:Perf.Throttled
+}
+Assert-Equal -Name 'Callback render path should bypass throttle at 0ms elapsed' -Actual ([string]$callbackThrottleCheck) -Expected '0'
+Write-Host "  PASS: callback throttle bypass works"
 
 Write-Host "[5/6] Validating debug trace and cache behavior under simulated key flow..."
 $debugCheck = & $module {
@@ -133,9 +161,9 @@ $debugCheck = & $module {
     }
 
     [pscustomobject]@{
-        TraceCount = [int]$script:DebugTrace.Count
+        TraceCount      = [int]$script:DebugTrace.Count
         ExceptionEvents = @($script:DebugTrace | Where-Object Reason -eq 'exception').Count
-        SpaceThrottled = @($script:DebugTrace | Where-Object { $_.Key -eq 'Spacebar' -and $_.Reason -eq 'throttled' }).Count
+        SpaceThrottled  = @($script:DebugTrace | Where-Object { $_.Key -eq 'Spacebar' -and $_.Reason -eq 'throttled' }).Count
     }
 }
 Assert-True -Name 'Debug simulation should produce trace events' -Condition ($debugCheck.TraceCount -ge 1)
@@ -156,7 +184,7 @@ $cacheCheck = & $module {
     & $paint $ctx | Out-Null
 
     [pscustomobject]@{
-        CacheHit = [int]$script:Perf.CacheHit
+        CacheHit  = [int]$script:Perf.CacheHit
         CacheMiss = [int]$script:Perf.CacheMiss
     }
 }
