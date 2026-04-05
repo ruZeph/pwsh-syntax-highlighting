@@ -9,20 +9,20 @@ $script:MaxBufferLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH) { [int]$
 $script:MaxCommandLookupLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH } else { 256 }
 
 $script:Styles = @{
-    ValidCommand = [System.ConsoleColor]::Green
+    ValidCommand   = [System.ConsoleColor]::Green
     InvalidCommand = [System.ConsoleColor]::Red
 }
 
 $script:Highlighters = @(
     @{
-        Name = 'main-command'
+        Name      = 'main-command'
         Predicate = {
             param($ctx)
             -not [string]::IsNullOrWhiteSpace($ctx.TokenText) -and
             -not $ctx.TokenText.Contains('[') -and
             -not $ctx.TokenText.Contains(']')
         }
-        Paint = {
+        Paint     = {
             param($ctx)
 
             if ($script:MaxCommandLookupLength -gt 0 -and $ctx.TokenText.Length -gt $script:MaxCommandLookupLength) {
@@ -47,7 +47,7 @@ $script:Highlighters = @(
             $exists = [bool](Get-Command -Name $ctx.TokenText -ErrorAction Ignore)
             $script:CommandLookupCache[$ctx.TokenText] = @{
                 Exists = $exists
-                Tick = $nowTicks
+                Tick   = $nowTicks
             }
             $script:CommandLookupOrder.Enqueue($ctx.TokenText)
 
@@ -65,22 +65,33 @@ $script:Highlighters = @(
 )
 
 $script:LastRenderSignature = ''
+$script:SafeMode = ($env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -eq '1')
 $script:EnableTelemetry = ($env:PWSH_SYNTAX_HIGHLIGHTING_METRICS -eq '1')
-$script:EnableDebugTrace = ($env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG -eq '1')
+$script:EnableDebugTrace = (-not $script:SafeMode) -and ($env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG -eq '1')
+$script:RenderErrorBudget = if ($env:PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET } else { 5 }
+$script:DegradedMode = $false
 $script:DebugTrace = New-Object System.Collections.Generic.List[object]
+$script:Preflight = [ordered]@{
+    Passed                   = $false
+    HostSupportsRawUI        = $false
+    PSReadLineLoaded         = $false
+    KeyHandlerCommandPresent = $false
+    MissingMethods           = @()
+}
 $script:Perf = [ordered]@{
-    RenderCalls = 0
-    Throttled = 0
-    NoToken = 0
-    SkippedUnchanged = 0
-    RenderErrors = 0
+    RenderCalls         = 0
+    Throttled           = 0
+    NoToken             = 0
+    SkippedUnchanged    = 0
+    RenderErrors        = 0
+    ErrorBudgetTrips    = 0
     RegistrationSkipped = 0
-    CacheHit = 0
-    CacheMiss = 0
-    PaintOps = 0
-    PaintChars = 0
-    NoColorWrite = 0
-    TotalRenderMs = 0.0
+    CacheHit            = 0
+    CacheMiss           = 0
+    PaintOps            = 0
+    PaintChars          = 0
+    NoColorWrite        = 0
+    TotalRenderMs       = 0.0
 }
 
 $script:AddDebugTraceEvent = {
@@ -103,11 +114,11 @@ $script:AddDebugTraceEvent = {
         }
 
         $script:DebugTrace.Add([pscustomobject]@{
-            Timestamp = (Get-Date)
-            Reason = $Reason
-            Key = if ($null -eq $Key) { 'NoName' } else { [string]$Key }
-            TokenText = $TokenText
-        })
+                Timestamp = (Get-Date)
+                Reason    = $Reason
+                Key       = if ($null -eq $Key) { 'NoName' } else { [string]$Key }
+                TokenText = $TokenText
+            })
 
         # Keep debug plumbing best-effort; never let tracing break key handlers.
         $global:SyntaxHighlightingDebugTrace = [object[]]$script:DebugTrace.ToArray()
@@ -116,6 +127,52 @@ $script:AddDebugTraceEvent = {
         return
     }
 }.GetNewClosure()
+
+$script:PublishMetrics = {
+    $m = [ordered]@{}
+    foreach ($k in $script:Perf.Keys) {
+        $m[$k] = $script:Perf[$k]
+    }
+    $m.SafeMode = $script:SafeMode
+    $m.DegradedMode = $script:DegradedMode
+    $m.RenderErrorBudget = $script:RenderErrorBudget
+    $m.PreflightPassed = $script:Preflight.Passed
+    $global:SyntaxHighlightingMetrics = [pscustomobject]$m
+}.GetNewClosure()
+
+function Invoke-SyntaxHighlightingPreflight {
+    $requiredMethods = @(
+        'GetBufferState',
+        'SetCursorPosition',
+        'Insert',
+        'TabCompleteNext',
+        'PreviousHistory',
+        'NextHistory',
+        'ForwardChar',
+        'BackwardChar',
+        'BeginningOfLine',
+        'EndOfLine',
+        'NextWord',
+        'BackwardWord',
+        'TabCompletePrevious',
+        'BackwardDeleteChar',
+        'DeleteChar'
+    )
+
+    $availableMethodNames = [Microsoft.PowerShell.PSConsoleReadLine].GetMethods() | Select-Object -ExpandProperty Name -Unique
+    $missing = @()
+    foreach ($name in $requiredMethods) {
+        if ($name -notin $availableMethodNames) {
+            $missing += $name
+        }
+    }
+
+    $script:Preflight.HostSupportsRawUI = ($null -ne $host -and $null -ne $host.UI -and $null -ne $host.UI.RawUI)
+    $script:Preflight.PSReadLineLoaded = ($null -ne (Get-Module PSReadLine -ErrorAction SilentlyContinue))
+    $script:Preflight.KeyHandlerCommandPresent = ($null -ne (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue))
+    $script:Preflight.MissingMethods = $missing
+    $script:Preflight.Passed = $script:Preflight.HostSupportsRawUI -and $script:Preflight.PSReadLineLoaded -and $script:Preflight.KeyHandlerCommandPresent -and ($missing.Count -eq 0)
+}
 
 $script:RenderAction = {
     param($KeyInfo)
@@ -134,224 +191,231 @@ $script:RenderAction = {
     $eventKey = if ($normalizedKeyInfo) { $normalizedKeyInfo.Key } else { [System.ConsoleKey]::NoName }
 
     try {
+        if ($script:DegradedMode) {
+            & $script:AddDebugTraceEvent 'degraded-mode-skip' $eventKey
+            return
+        }
 
-    $minRenderIntervalMs = 30
-    if ($normalizedKeyInfo -and $normalizedKeyInfo.Key -in @(
-            [System.ConsoleKey]::UpArrow,
-            [System.ConsoleKey]::DownArrow,
-            [System.ConsoleKey]::LeftArrow,
-            [System.ConsoleKey]::RightArrow,
-            [System.ConsoleKey]::Home,
-            [System.ConsoleKey]::End,
-            [System.ConsoleKey]::Tab,
-            [System.ConsoleKey]::Spacebar,
-            [System.ConsoleKey]::Delete,
-            [System.ConsoleKey]::Backspace
-        )) {
-        $minRenderIntervalMs = 0
-    }
+        $minRenderIntervalMs = 30
+        if ($normalizedKeyInfo -and $normalizedKeyInfo.Key -in @(
+                [System.ConsoleKey]::UpArrow,
+                [System.ConsoleKey]::DownArrow,
+                [System.ConsoleKey]::LeftArrow,
+                [System.ConsoleKey]::RightArrow,
+                [System.ConsoleKey]::Home,
+                [System.ConsoleKey]::End,
+                [System.ConsoleKey]::Tab,
+                [System.ConsoleKey]::Spacebar,
+                [System.ConsoleKey]::Delete,
+                [System.ConsoleKey]::Backspace
+            )) {
+            $minRenderIntervalMs = 0
+        }
 
-    $nowTick = [Environment]::TickCount64
-    $elapsedMs = ($nowTick - $script:LastRenderTick)
-    if ($elapsedMs -lt $minRenderIntervalMs) {
-        & $script:AddDebugTraceEvent 'throttled' $eventKey
-        if ($script:EnableTelemetry) { $script:Perf.Throttled++ }
-        return
-    }
+        $nowTick = [Environment]::TickCount64
+        $elapsedMs = ($nowTick - $script:LastRenderTick)
+        if ($elapsedMs -lt $minRenderIntervalMs) {
+            & $script:AddDebugTraceEvent 'throttled' $eventKey
+            if ($script:EnableTelemetry) { $script:Perf.Throttled++ }
+            return
+        }
 
-    $perfStart = $null
-    if ($script:EnableTelemetry) {
-        $perfStart = [System.Diagnostics.Stopwatch]::StartNew()
-    }
-
-    $ast = $null; $tokens = $null; $errors = $null; $cursor = $null
-    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$ast, [ref]$tokens, [ref]$errors, [ref]$cursor)
-    if (-not $tokens -or $tokens.Count -eq 0 -or -not $tokens[0]) {
-        & $script:AddDebugTraceEvent 'no-token' $eventKey
+        $perfStart = $null
         if ($script:EnableTelemetry) {
-            $script:Perf.NoToken++
-            $perfStart.Stop()
-            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        }
-        return
-    }
-
-    $token = $tokens[0]
-    $tokenText = [string]$token.Text
-    if ([string]::IsNullOrWhiteSpace($tokenText)) {
-        & $script:AddDebugTraceEvent 'whitespace-token' $eventKey
-        if ($script:EnableTelemetry) {
-            $perfStart.Stop()
-            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        }
-        return
-    }
-
-    if (-not $host -or -not $host.UI -or -not $host.UI.RawUI) {
-        & $script:AddDebugTraceEvent 'host-missing' $eventKey $tokenText
-        return
-    }
-
-    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition(0)
-    $cursorPosX = $host.UI.RawUI.CursorPosition.X
-    $cursorPosY = $host.UI.RawUI.CursorPosition.Y
-    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
-
-    $tokenStartOffset = ($token.Extent.StartOffset)
-    $tokenLength = ($token.Extent.EndOffset - $tokenStartOffset)
-    if ($tokenLength -le 0) {
-        & $script:AddDebugTraceEvent 'invalid-token-length' $eventKey $tokenText
-        if ($script:EnableTelemetry) {
-            $perfStart.Stop()
-            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        }
-        return
-    }
-
-    $bufferLength = if ($ast -and $ast.Extent) { $ast.Extent.EndOffset } else { -1 }
-    if ($script:MaxBufferLength -gt 0 -and $bufferLength -gt $script:MaxBufferLength) {
-        & $script:AddDebugTraceEvent 'max-buffer-length' $eventKey $tokenText
-        if ($script:EnableTelemetry) {
-            $perfStart.Stop()
-            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        }
-        return
-    }
-
-    $ctx = [pscustomobject]@{
-        Token = $token
-        TokenText = $tokenText
-        TokenStartOffset = $tokenStartOffset
-        TokenLength = $tokenLength
-        BufferLength = $bufferLength
-        CursorX = $cursorPosX
-        CursorY = $cursorPosY
-        Ast = $ast
-        Tokens = $tokens
-        Errors = $errors
-    }
-
-    $color = $null
-    foreach ($highlighter in $script:Highlighters) {
-        $useThis = $false
-        try {
-            $useThis = [bool](& $highlighter.Predicate $ctx)
-        }
-        catch {
-            continue
+            $perfStart = [System.Diagnostics.Stopwatch]::StartNew()
         }
 
-        if (-not $useThis) { continue }
-
-        try {
-            $color = & $highlighter.Paint $ctx
-        }
-        catch {
-            $color = $null
-        }
-
-        if ($null -ne $color) {
-            break
-        }
-    }
-
-    if ($null -eq $color) {
-        & $script:AddDebugTraceEvent 'no-color' $eventKey $tokenText
-        if ($script:EnableTelemetry) {
-            $perfStart.Stop()
-            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        }
-        return
-    }
-
-    $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
-    $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
-    $forceRepaint = $false
-    if ($normalizedKeyInfo -and $normalizedKeyInfo.Key -in @(
-            [System.ConsoleKey]::Spacebar,
-            [System.ConsoleKey]::UpArrow,
-            [System.ConsoleKey]::DownArrow,
-            [System.ConsoleKey]::LeftArrow,
-            [System.ConsoleKey]::RightArrow,
-            [System.ConsoleKey]::Home,
-            [System.ConsoleKey]::End,
-            [System.ConsoleKey]::Tab
-        )) {
-        $forceRepaint = $true
-    }
-
-    if (-not $forceRepaint -and $signature -eq $script:LastRenderSignature) {
-        & $script:AddDebugTraceEvent 'skipped-unchanged' $eventKey $tokenText
-        if ($script:EnableTelemetry) {
-            $script:Perf.SkippedUnchanged++
-            $perfStart.Stop()
-            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        }
-        return
-    }
-
-    $sX = ($cursorPosX + $tokenStartOffset)
-    $Y = $cursorPosY
-    $eX = ($sX + $tokenLength)
-    $nextLine = $false
-
-    $painted = 0
-    $bufSize = $host.UI.RawUI.BufferSize.Width
-    while ($painted -ne $tokenLength) {
-        $scanXEnd = $eX
-        if ($eX -gt $bufSize) {
-            $scanXEnd = $bufSize
-            $eX = $eX - $bufSize
-            $nextLine = $true
-        }
-
-        $finalRec = New-Object System.Management.Automation.Host.Rectangle($sX, $Y, ($scanXEnd - 1), $Y)
-        $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
-        $needsWrite = $false
-        for ($xPosition = 0; $xPosition -lt ($scanXEnd - $sX); $xPosition++) {
-            $bufferItem = $finalBuf.GetValue(0, $xPosition)
-            if ($bufferItem.ForegroundColor -ne $color) {
-                $bufferItem.ForegroundColor = $color
-                $finalBuf.SetValue($bufferItem, 0, $xPosition)
-                $needsWrite = $true
-                if ($script:EnableTelemetry) { $script:Perf.PaintChars++ }
+        $ast = $null; $tokens = $null; $errors = $null; $cursor = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$ast, [ref]$tokens, [ref]$errors, [ref]$cursor)
+        if (-not $tokens -or $tokens.Count -eq 0 -or -not $tokens[0]) {
+            & $script:AddDebugTraceEvent 'no-token' $eventKey
+            if ($script:EnableTelemetry) {
+                $script:Perf.NoToken++
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
             }
-            $painted++
+            return
         }
 
-        if ($needsWrite) {
-            $coords = New-Object System.Management.Automation.Host.Coordinates $sX, $Y
-            $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
-            if ($script:EnableTelemetry) { $script:Perf.PaintOps++ }
-        }
-        elseif ($script:EnableTelemetry) {
-            $script:Perf.NoColorWrite++
+        $token = $tokens[0]
+        $tokenText = [string]$token.Text
+        if ([string]::IsNullOrWhiteSpace($tokenText)) {
+            & $script:AddDebugTraceEvent 'whitespace-token' $eventKey
+            if ($script:EnableTelemetry) {
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+            }
+            return
         }
 
-        if ($nextLine) {
-            $sX = 0
-            $Y++
-            $nextLine = $false
+        if (-not $host -or -not $host.UI -or -not $host.UI.RawUI) {
+            & $script:AddDebugTraceEvent 'host-missing' $eventKey $tokenText
+            return
         }
-    }
 
-    $script:LastRenderSignature = $signature
-    $script:LastRenderTick = $nowTick
-    $global:lastRender = Get-Date
-    & $script:AddDebugTraceEvent 'painted' $eventKey $tokenText
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition(0)
+        $cursorPosX = $host.UI.RawUI.CursorPosition.X
+        $cursorPosY = $host.UI.RawUI.CursorPosition.Y
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
 
-    if ($script:EnableTelemetry) {
-        $perfStart.Stop()
-        $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-        $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
-    }
+        $tokenStartOffset = ($token.Extent.StartOffset)
+        $tokenLength = ($token.Extent.EndOffset - $tokenStartOffset)
+        if ($tokenLength -le 0) {
+            & $script:AddDebugTraceEvent 'invalid-token-length' $eventKey $tokenText
+            if ($script:EnableTelemetry) {
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+            }
+            return
+        }
+
+        $bufferLength = if ($ast -and $ast.Extent) { $ast.Extent.EndOffset } else { -1 }
+        if ($script:MaxBufferLength -gt 0 -and $bufferLength -gt $script:MaxBufferLength) {
+            & $script:AddDebugTraceEvent 'max-buffer-length' $eventKey $tokenText
+            if ($script:EnableTelemetry) {
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+            }
+            return
+        }
+
+        $ctx = [pscustomobject]@{
+            Token            = $token
+            TokenText        = $tokenText
+            TokenStartOffset = $tokenStartOffset
+            TokenLength      = $tokenLength
+            BufferLength     = $bufferLength
+            CursorX          = $cursorPosX
+            CursorY          = $cursorPosY
+            Ast              = $ast
+            Tokens           = $tokens
+            Errors           = $errors
+        }
+
+        $color = $null
+        foreach ($highlighter in $script:Highlighters) {
+            $useThis = $false
+            try {
+                $useThis = [bool](& $highlighter.Predicate $ctx)
+            }
+            catch {
+                continue
+            }
+
+            if (-not $useThis) { continue }
+
+            try {
+                $color = & $highlighter.Paint $ctx
+            }
+            catch {
+                $color = $null
+            }
+
+            if ($null -ne $color) {
+                break
+            }
+        }
+
+        if ($null -eq $color) {
+            & $script:AddDebugTraceEvent 'no-color' $eventKey $tokenText
+            if ($script:EnableTelemetry) {
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+            }
+            return
+        }
+
+        $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
+        $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
+        $forceRepaint = $false
+        if ($normalizedKeyInfo -and $normalizedKeyInfo.Key -in @(
+                [System.ConsoleKey]::Spacebar,
+                [System.ConsoleKey]::UpArrow,
+                [System.ConsoleKey]::DownArrow,
+                [System.ConsoleKey]::LeftArrow,
+                [System.ConsoleKey]::RightArrow,
+                [System.ConsoleKey]::Home,
+                [System.ConsoleKey]::End,
+                [System.ConsoleKey]::Tab
+            )) {
+            $forceRepaint = $true
+        }
+
+        if (-not $forceRepaint -and $signature -eq $script:LastRenderSignature) {
+            & $script:AddDebugTraceEvent 'skipped-unchanged' $eventKey $tokenText
+            if ($script:EnableTelemetry) {
+                $script:Perf.SkippedUnchanged++
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+            }
+            return
+        }
+
+        $sX = ($cursorPosX + $tokenStartOffset)
+        $Y = $cursorPosY
+        $eX = ($sX + $tokenLength)
+        $nextLine = $false
+
+        $painted = 0
+        $bufSize = $host.UI.RawUI.BufferSize.Width
+        while ($painted -ne $tokenLength) {
+            $scanXEnd = $eX
+            if ($eX -gt $bufSize) {
+                $scanXEnd = $bufSize
+                $eX = $eX - $bufSize
+                $nextLine = $true
+            }
+
+            $finalRec = New-Object System.Management.Automation.Host.Rectangle($sX, $Y, ($scanXEnd - 1), $Y)
+            $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
+            $needsWrite = $false
+            for ($xPosition = 0; $xPosition -lt ($scanXEnd - $sX); $xPosition++) {
+                $bufferItem = $finalBuf.GetValue(0, $xPosition)
+                if ($bufferItem.ForegroundColor -ne $color) {
+                    $bufferItem.ForegroundColor = $color
+                    $finalBuf.SetValue($bufferItem, 0, $xPosition)
+                    $needsWrite = $true
+                    if ($script:EnableTelemetry) { $script:Perf.PaintChars++ }
+                }
+                $painted++
+            }
+
+            if ($needsWrite) {
+                $coords = New-Object System.Management.Automation.Host.Coordinates $sX, $Y
+                $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
+                if ($script:EnableTelemetry) { $script:Perf.PaintOps++ }
+            }
+            elseif ($script:EnableTelemetry) {
+                $script:Perf.NoColorWrite++
+            }
+
+            if ($nextLine) {
+                $sX = 0
+                $Y++
+                $nextLine = $false
+            }
+        }
+
+        $script:LastRenderSignature = $signature
+        $script:LastRenderTick = $nowTick
+        $global:lastRender = Get-Date
+        & $script:AddDebugTraceEvent 'painted' $eventKey $tokenText
+
+        if ($script:EnableTelemetry) {
+            $perfStart.Stop()
+            $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+            & $script:PublishMetrics
+        }
     }
     catch {
         & $script:AddDebugTraceEvent 'exception' $eventKey
-        if ($script:EnableTelemetry) {
-            $script:Perf.RenderErrors++
-            $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
+        $script:Perf.RenderErrors++
+        if ($script:Perf.RenderErrors -ge $script:RenderErrorBudget) {
+            $script:DegradedMode = $true
+            $script:EnableDebugTrace = $false
+            $script:Perf.ErrorBudgetTrips++
         }
+        & $script:PublishMetrics
         return
     }
 }.GetNewClosure()
@@ -374,7 +438,21 @@ $functionKeyMap = @(
     @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
     @{ Key = 'Delete'; Function = 'DeleteChar' }
 )
+
+if ($script:SafeMode) {
+    $functionKeyMap = @(
+        @{ Key = 'UpArrow'; Function = 'PreviousHistory' }
+        @{ Key = 'DownArrow'; Function = 'NextHistory' }
+        @{ Key = 'RightArrow'; Function = 'ForwardChar' }
+        @{ Key = 'LeftArrow'; Function = 'BackwardChar' }
+        @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
+        @{ Key = 'Delete'; Function = 'DeleteChar' }
+    )
+}
 $script:RegisteredFunctionKeys = @{}
+
+Invoke-SyntaxHighlightingPreflight
+& $script:PublishMetrics
 
 $ExecutionContext.SessionState.Module.OnRemove = {
     foreach ($key in $printableChars) {
@@ -386,28 +464,30 @@ $ExecutionContext.SessionState.Module.OnRemove = {
         Set-PSReadLineKeyHandler -Key $entry.Key -Function $entry.Value -ErrorAction SilentlyContinue
     }
 
-    if ($script:EnableTelemetry) {
-        $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
-    }
+    & $script:PublishMetrics
 }
 
 $renderAction = $script:RenderAction
+if (-not $script:Preflight.Passed) {
+    return
+}
+
 $printableChars + "Tab" | ForEach-Object {
     Set-PSReadLineKeyHandler -Key $_ `
         -BriefDescription ValidatePrograms `
         -LongDescription "Validate typed program's existence in path variable" `
         -ScriptBlock {
-            param($key, $arg)
+        param($key, $arg)
 
-            if ($key.Key -ne [System.ConsoleKey]::Tab) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert($key.KeyChar)
-            }
-            else {
-                [Microsoft.PowerShell.PSConsoleReadLine]::TabCompleteNext($key)
-            }
+        if ($key.Key -ne [System.ConsoleKey]::Tab) {
+            [Microsoft.PowerShell.PSConsoleReadLine]::Insert($key.KeyChar)
+        }
+        else {
+            [Microsoft.PowerShell.PSConsoleReadLine]::TabCompleteNext($key)
+        }
 
-            & $renderAction $key
-        }.GetNewClosure()
+        & $renderAction $key
+    }.GetNewClosure()
 }
 
 foreach ($entry in $functionKeyMap) {
@@ -419,23 +499,23 @@ foreach ($entry in $functionKeyMap) {
             -BriefDescription ValidatePrograms `
             -LongDescription "Validate typed program's existence in path variable" `
             -ScriptBlock {
-                param($key, $arg)
-                switch ($methodName) {
-                    'PreviousHistory' { [Microsoft.PowerShell.PSConsoleReadLine]::PreviousHistory($key, $arg) }
-                    'NextHistory' { [Microsoft.PowerShell.PSConsoleReadLine]::NextHistory($key, $arg) }
-                    'ForwardChar' { [Microsoft.PowerShell.PSConsoleReadLine]::ForwardChar($key, $arg) }
-                    'BackwardChar' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardChar($key, $arg) }
-                    'BeginningOfLine' { [Microsoft.PowerShell.PSConsoleReadLine]::BeginningOfLine($key, $arg) }
-                    'EndOfLine' { [Microsoft.PowerShell.PSConsoleReadLine]::EndOfLine($key, $arg) }
-                    'NextWord' { [Microsoft.PowerShell.PSConsoleReadLine]::NextWord($key, $arg) }
-                    'BackwardWord' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardWord($key, $arg) }
-                    'TabCompletePrevious' { [Microsoft.PowerShell.PSConsoleReadLine]::TabCompletePrevious($key, $arg) }
-                    'BackwardDeleteChar' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($key, $arg) }
-                    'DeleteChar' { [Microsoft.PowerShell.PSConsoleReadLine]::DeleteChar($key, $arg) }
-                    default { return }
-                }
-                & $renderAction $key
-            }.GetNewClosure()
+            param($key, $arg)
+            switch ($methodName) {
+                'PreviousHistory' { [Microsoft.PowerShell.PSConsoleReadLine]::PreviousHistory($key, $arg) }
+                'NextHistory' { [Microsoft.PowerShell.PSConsoleReadLine]::NextHistory($key, $arg) }
+                'ForwardChar' { [Microsoft.PowerShell.PSConsoleReadLine]::ForwardChar($key, $arg) }
+                'BackwardChar' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardChar($key, $arg) }
+                'BeginningOfLine' { [Microsoft.PowerShell.PSConsoleReadLine]::BeginningOfLine($key, $arg) }
+                'EndOfLine' { [Microsoft.PowerShell.PSConsoleReadLine]::EndOfLine($key, $arg) }
+                'NextWord' { [Microsoft.PowerShell.PSConsoleReadLine]::NextWord($key, $arg) }
+                'BackwardWord' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardWord($key, $arg) }
+                'TabCompletePrevious' { [Microsoft.PowerShell.PSConsoleReadLine]::TabCompletePrevious($key, $arg) }
+                'BackwardDeleteChar' { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($key, $arg) }
+                'DeleteChar' { [Microsoft.PowerShell.PSConsoleReadLine]::DeleteChar($key, $arg) }
+                default { return }
+            }
+            & $renderAction $key
+        }.GetNewClosure()
         $script:RegisteredFunctionKeys[$keyName] = $methodName
     }
     catch {

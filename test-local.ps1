@@ -163,7 +163,37 @@ Assert-True -Name 'Direct cache check should produce hit(s)' -Condition ($cacheC
 Assert-True -Name 'Direct cache check should produce miss(es)' -Condition ($cacheCheck.CacheMiss -ge 1)
 Write-Host "  PASS: debug trace and cache behavior validated"
 
-Write-Host "[7/7] Validating key binding restore after remove..."
+Write-Host "[7/8] Validating failure injection resilience..."
+$injectionCheck = & $module {
+    $original = $script:AddDebugTraceEvent
+    $script:AddDebugTraceEvent = { throw 'debug-trace-failure' }
+    try {
+        $k = [System.ConsoleKeyInfo]::new(' ', [System.ConsoleKey]::Spacebar, $false, $false, $false)
+        & $script:RenderAction $k
+        'ok'
+    }
+    catch {
+        'failed'
+    }
+    finally {
+        $script:AddDebugTraceEvent = $original
+    }
+}
+Assert-Equal -Name 'Render path should survive injected debug failure' -Actual $injectionCheck -Expected 'ok'
+Write-Host "  PASS: failure injection resilience validated"
+
+Write-Host "[8/9] Validating safe-mode reduced keymap..."
+Remove-Module $moduleName -ErrorAction SilentlyContinue
+$env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE = '1'
+Import-Module $moduleManifest -Force -ErrorAction Stop
+$altF = Get-KeyFunction -Key 'Alt+f'
+Assert-True -Name 'Safe mode should not register extended compatibility key handlers' -Condition ($altF -ne 'ValidatePrograms')
+Remove-Module $moduleName -ErrorAction SilentlyContinue
+Remove-Item Env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -ErrorAction SilentlyContinue
+Import-Module $moduleManifest -Force -ErrorAction Stop
+Write-Host "  PASS: safe-mode reduced keymap validated"
+
+Write-Host "[9/9] Validating key binding restore after remove..."
 Remove-Module $moduleName -ErrorAction Stop
 foreach ($k in $expectedDefault.Keys) {
     Assert-Equal -Name "Default key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected $expectedDefault[$k]
