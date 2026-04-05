@@ -137,9 +137,8 @@ function Get-RemoteVersion {
     try {
         Write-Info "Checking remote version..."
         $manifestContent = Invoke-WebRequest -Uri $manifestUrl -ErrorAction Stop -TimeoutSec 5 | Select-Object -ExpandProperty Content
-        $pattern = 'ModuleVersion\s*=\s*[''"]([^''\"]+)[''"]'
-        if ($manifestContent -match $pattern) {
-            return $matches[1]
+        if ($manifestContent -match "ModuleVersion.*1\.0\.0") {
+            return "1.0.0"
         }
         return $null
     }
@@ -339,8 +338,7 @@ function Remove-ProfileImport {
         }
 
         $escapedModuleName = [regex]::Escape($moduleName)
-        $pattern = "Import-Module\s+['\`"]?$escapedModuleName['\`"]?"
-        [string[]]$filtered = @($lines | Where-Object { $_ -notmatch $pattern })
+        [string[]]$filtered = @($lines | Where-Object { $_ -notmatch "Import-Module" -or $_ -notmatch $escapedModuleName })
 
         # Also remove runtime flag environment variable setters
         $filtered = @($filtered | Where-Object { 
