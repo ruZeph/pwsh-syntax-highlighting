@@ -50,7 +50,7 @@ function Write-WarnMsg {
     Write-Host "[WARN] $Message" -ForegroundColor Yellow
 }
 
-function Ensure-ProfileImport {
+function Add-ProfileImport {
     if ($NoProfileUpdate) {
         Write-Info 'Skipping profile update due to -NoProfileUpdate.'
         return
@@ -134,7 +134,7 @@ function Install-FromZip {
     Remove-Module $moduleName -ErrorAction SilentlyContinue
     Import-Module $moduleName -Force
 
-    Ensure-ProfileImport
+    Add-ProfileImport
 
     Write-Good "Installed $moduleName to: $moduleRoot"
     Write-Good 'Module imported for current session.'
@@ -155,7 +155,7 @@ function Uninstall-ModuleLocal {
     Write-Good "Uninstalled $moduleName from current user scope."
 }
 
-function Show-Menu {
+function Start-Menu {
     Write-Host ''
     Write-Host 'pwsh-syntax-highlighting bootstrap' -ForegroundColor Magenta
     Write-Host '1) Install to current user + autoload in profile'
@@ -195,5 +195,5 @@ elseif ($Uninstall) {
     Uninstall-ModuleLocal
 }
 else {
-    Show-Menu
+    Start-Menu
 }
