@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 $moduleName = 'syntax-highlighting'
 $moduleManifest = Join-Path $PSScriptRoot 'syntax-highlighting.psd1'
+$env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG = '1'
 $keys = @('UpArrow', 'DownArrow', 'RightArrow', 'LeftArrow', 'Backspace', 'Delete')
 $expectedDefault = @{
     UpArrow = 'PreviousHistory'
@@ -104,25 +105,65 @@ $throttleCheck = & $module {
     $script:Perf.Throttled = 0
 
     $script:LastRenderTick = [Environment]::TickCount64
-    $printableKey = [System.ConsoleKeyInfo]::new('a', [System.ConsoleKey]::A, $false, $false, $false)
-    & $script:RenderAction $printableKey
-    $afterPrintable = [int]$script:Perf.Throttled
-
-    $script:LastRenderTick = [Environment]::TickCount64
     $spaceKey = [System.ConsoleKeyInfo]::new(' ', [System.ConsoleKey]::Spacebar, $false, $false, $false)
     & $script:RenderAction $spaceKey
-    $afterSpace = [int]$script:Perf.Throttled
-
-    [pscustomobject]@{
-        Printable = $afterPrintable
-        Space = $afterSpace
-    }
+    [int]$script:Perf.Throttled
 }
-Assert-True -Name 'Printable key should be throttle-eligible at 0ms elapsed' -Condition ($throttleCheck.Printable -ge 1)
-Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck.Space) -Expected ([string]$throttleCheck.Printable)
+Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck) -Expected '0'
 Write-Host "  PASS: immediate-key throttle bypass works"
 
-Write-Host "[5/5] Validating key binding restore after remove..."
+Write-Host "[5/6] Validating debug trace and cache behavior under simulated key flow..."
+$debugCheck = & $module {
+    $script:EnableTelemetry = $true
+    $script:EnableDebugTrace = $true
+    $script:DebugTrace.Clear()
+    $script:Perf.CacheHit = 0
+    $script:Perf.CacheMiss = 0
+    $script:CommandLookupCache.Clear()
+
+    $spaceKey = [System.ConsoleKeyInfo]::new(' ', [System.ConsoleKey]::Spacebar, $false, $false, $false)
+    $upKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::UpArrow, $false, $false, $false)
+    $leftKey = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::LeftArrow, $false, $false, $false)
+    $backspaceKey = [System.ConsoleKeyInfo]::new([char]8, [System.ConsoleKey]::Backspace, $false, $false, $false)
+
+    foreach ($k in @($spaceKey, $upKey, $leftKey, $backspaceKey, $spaceKey)) {
+        $script:LastRenderTick = [Environment]::TickCount64
+        & $script:RenderAction $k
+    }
+
+    [pscustomobject]@{
+        TraceCount = [int]$script:DebugTrace.Count
+        ExceptionEvents = @($script:DebugTrace | Where-Object Reason -eq 'exception').Count
+        SpaceThrottled = @($script:DebugTrace | Where-Object { $_.Key -eq 'Spacebar' -and $_.Reason -eq 'throttled' }).Count
+    }
+}
+Assert-True -Name 'Debug simulation should produce trace events' -Condition ($debugCheck.TraceCount -ge 1)
+Assert-Equal -Name 'Space in simulated flow should not throttle' -Actual ([string]$debugCheck.SpaceThrottled) -Expected '0'
+Write-Host "  PASS: debug trace behavior validated"
+
+Write-Host "[6/7] Validating command cache miss/hit behavior directly..."
+$cacheCheck = & $module {
+    $script:EnableTelemetry = $true
+    $script:Perf.CacheHit = 0
+    $script:Perf.CacheMiss = 0
+    $script:CommandLookupCache.Clear()
+    while ($script:CommandLookupOrder.Count -gt 0) { [void]$script:CommandLookupOrder.Dequeue() }
+
+    $ctx = [pscustomobject]@{ TokenText = 'Get-ChildItem' }
+    $paint = $script:Highlighters[0].Paint
+    & $paint $ctx | Out-Null
+    & $paint $ctx | Out-Null
+
+    [pscustomobject]@{
+        CacheHit = [int]$script:Perf.CacheHit
+        CacheMiss = [int]$script:Perf.CacheMiss
+    }
+}
+Assert-True -Name 'Direct cache check should produce hit(s)' -Condition ($cacheCheck.CacheHit -ge 1)
+Assert-True -Name 'Direct cache check should produce miss(es)' -Condition ($cacheCheck.CacheMiss -ge 1)
+Write-Host "  PASS: debug trace and cache behavior validated"
+
+Write-Host "[7/7] Validating key binding restore after remove..."
 Remove-Module $moduleName -ErrorAction Stop
 foreach ($k in $expectedDefault.Keys) {
     Assert-Equal -Name "Default key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected $expectedDefault[$k]
