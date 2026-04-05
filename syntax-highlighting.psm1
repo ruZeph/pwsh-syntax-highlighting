@@ -12,6 +12,8 @@ $script:Perf = [ordered]@{
     Throttled = 0
     NoToken = 0
     SkippedUnchanged = 0
+    RenderErrors = 0
+    RegistrationSkipped = 0
     CacheHit = 0
     CacheMiss = 0
     PaintOps = 0
@@ -24,6 +26,8 @@ $script:RenderAction = {
     param([System.ConsoleKeyInfo]$KeyInfo)
 
     if ($script:EnableTelemetry) { $script:Perf.RenderCalls++ }
+
+    try {
 
     $minRenderIntervalMs = 30
     if ($KeyInfo -and $KeyInfo.Key -in @(
@@ -69,6 +73,10 @@ $script:RenderAction = {
             $perfStart.Stop()
             $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
         }
+        return
+    }
+
+    if (-not $host -or -not $host.UI -or -not $host.UI.RawUI) {
         return
     }
 
@@ -181,21 +189,35 @@ $script:RenderAction = {
         $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
         $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
     }
+    }
+    catch {
+        if ($script:EnableTelemetry) {
+            $script:Perf.RenderErrors++
+            $global:SyntaxHighlightingMetrics = [pscustomobject]$script:Perf
+        }
+        return
+    }
 }.GetNewClosure()
 
 $printableChars = [char[]](0x20..0x7e + 0xa0..0xff)
-$functionKeyMap = @{
-    UpArrow = "PreviousHistory"
-    DownArrow = "NextHistory"
-    RightArrow = "ForwardChar"
-    LeftArrow = "BackwardChar"
-    Home = "BeginningOfLine"
-    End = "EndOfLine"
-    "Ctrl+RightArrow" = "NextWord"
-    "Ctrl+LeftArrow" = "BackwardWord"
-    Backspace = "BackwardDeleteChar"
-    Delete = "DeleteChar"
-}
+$functionKeyMap = @(
+    @{ Key = 'UpArrow'; Function = 'PreviousHistory' }
+    @{ Key = 'DownArrow'; Function = 'NextHistory' }
+    @{ Key = 'RightArrow'; Function = 'ForwardChar' }
+    @{ Key = 'LeftArrow'; Function = 'BackwardChar' }
+    @{ Key = 'Home'; Function = 'BeginningOfLine' }
+    @{ Key = 'End'; Function = 'EndOfLine' }
+    @{ Key = 'Ctrl+RightArrow'; Function = 'NextWord' }
+    @{ Key = 'Ctrl+LeftArrow'; Function = 'BackwardWord' }
+    @{ Key = 'Alt+f'; Function = 'NextWord' }
+    @{ Key = 'Alt+b'; Function = 'BackwardWord' }
+    @{ Key = 'Ctrl+a'; Function = 'BeginningOfLine' }
+    @{ Key = 'Ctrl+e'; Function = 'EndOfLine' }
+    @{ Key = 'Shift+Tab'; Function = 'TabCompletePrevious' }
+    @{ Key = 'Backspace'; Function = 'BackwardDeleteChar' }
+    @{ Key = 'Delete'; Function = 'DeleteChar' }
+)
+$script:RegisteredFunctionKeys = @{}
 
 $ExecutionContext.SessionState.Module.OnRemove = {
     foreach ($key in $printableChars) {
@@ -203,7 +225,7 @@ $ExecutionContext.SessionState.Module.OnRemove = {
     }
 
     Set-PSReadLineKeyHandler -Key Tab -Function Complete -ErrorAction SilentlyContinue
-    foreach ($entry in $functionKeyMap.GetEnumerator()) {
+    foreach ($entry in $script:RegisteredFunctionKeys.GetEnumerator()) {
         Set-PSReadLineKeyHandler -Key $entry.Key -Function $entry.Value -ErrorAction SilentlyContinue
     }
 
@@ -231,19 +253,27 @@ $printableChars + "Tab" | ForEach-Object {
         }.GetNewClosure()
 }
 
-foreach ($entry in $functionKeyMap.GetEnumerator()) {
-    $methodName = $entry.Value
+foreach ($entry in $functionKeyMap) {
+    $methodName = [string]$entry.Function
+    $keyName = [string]$entry.Key
     $method = [Microsoft.PowerShell.PSConsoleReadLine].GetMethod($methodName, [type[]]@([System.ConsoleKeyInfo], [object]))
     if (-not $method) {
-        throw "Could not find PSReadLine method '$methodName' for key '$($entry.Key)'."
+        if ($script:EnableTelemetry) { $script:Perf.RegistrationSkipped++ }
+        continue
     }
 
-    Set-PSReadLineKeyHandler -Key $entry.Key `
-        -BriefDescription ValidatePrograms `
-        -LongDescription "Validate typed program's existence in path variable" `
-        -ScriptBlock {
-            param($key, $arg)
-            $method.Invoke($null, @($key, $arg)) | Out-Null
-            & $renderAction $key
-        }.GetNewClosure()
+    try {
+        Set-PSReadLineKeyHandler -Key $keyName `
+            -BriefDescription ValidatePrograms `
+            -LongDescription "Validate typed program's existence in path variable" `
+            -ScriptBlock {
+                param($key, $arg)
+                $method.Invoke($null, @($key, $arg)) | Out-Null
+                & $renderAction $key
+            }.GetNewClosure()
+        $script:RegisteredFunctionKeys[$keyName] = $methodName
+    }
+    catch {
+        if ($script:EnableTelemetry) { $script:Perf.RegistrationSkipped++ }
+    }
 }
