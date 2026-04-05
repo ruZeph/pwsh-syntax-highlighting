@@ -38,7 +38,7 @@ This fork is currently not published to PowerShell Gallery.
 Run this to open an interactive installer menu.
 
 ```powershell
-irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | iex
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/install.ps1' | iex
 ```
 
 The menu supports:
@@ -106,8 +106,8 @@ See [scripts/example-custom-theme.ps1](scripts/example-custom-theme.ps1) for a c
 Configure runtime flags interactively during installation:
 
 ```powershell
-# Run the bootstrap installer with interactive menu
-irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | iex
+# Run the installer with interactive menu
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/install.ps1' | iex
 
 # Menu options:
 # 1) Install to current user + autoload in profile
@@ -130,9 +130,21 @@ Flags will be persisted to your user-scope environment when you install or updat
 The uninstall function now cleans up all related environment variables and profile entries:
 
 ```powershell
-irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | 
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/install.ps1' | \
     iex -ArgumentList @('-Uninstall')
 ```
+
+## Safety Features
+
+The installer includes several safety checks:
+
+- **Confirmation prompts** for destructive operations (install, update, uninstall)
+- **Profile backup** before modifications (saved as `.pwsh-syntax-highlighting.backup`)
+- **Write permission validation** before modifying files or directories
+- **Internet connectivity check** before attempting downloads
+- **Existing installation detection** with override confirmation
+- **Module state check** before operations (warns if module is loaded)
+- **Automatic cleanup** of temporary files and profiles on error with rollback
 
 ## Known Limitations
 
@@ -216,10 +228,11 @@ Run micro-benchmark only:
 |- docs/
 |  |- perf-and-hardening.md
 |- scripts/
-|  |- benchmark-render.ps1
-|  |- bootstrap-installer.ps1
-|  |- manual-test-setup-env.ps1
-|  |- validate-gate.ps1
+  |- install.ps1 (main installer with safety checks)
+  |- example-custom-theme.ps1
+  |- manual-test-setup-env.ps1
+  |- validate-gate.ps1
+  |- benchmark-render.ps1
 |- src/
 |  |- pwsh-syntax-highlighting.psm1
 |- tests/
