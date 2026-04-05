@@ -1,4 +1,5 @@
 $global:lastRender = Get-Date
+$script:LastRenderTick = [Environment]::TickCount64
 
 $script:CommandLookupCache = @{}
 $script:CommandLookupOrder = [System.Collections.Generic.Queue[string]]::new()
@@ -100,7 +101,9 @@ $script:RenderAction = {
         $minRenderIntervalMs = 0
     }
 
-    if (((Get-Date) - $global:lastRender).TotalMilliseconds -le $minRenderIntervalMs) {
+    $nowTick = [Environment]::TickCount64
+    $elapsedMs = ($nowTick - $script:LastRenderTick)
+    if ($elapsedMs -lt $minRenderIntervalMs) {
         if ($script:EnableTelemetry) { $script:Perf.Throttled++ }
         return
     }
@@ -275,6 +278,7 @@ $script:RenderAction = {
     }
 
     $script:LastRenderSignature = $signature
+    $script:LastRenderTick = $nowTick
     $global:lastRender = Get-Date
 
     if ($script:EnableTelemetry) {

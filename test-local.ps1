@@ -35,6 +35,20 @@ function Assert-Equal {
     }
 }
 
+function Assert-True {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [bool]$Condition
+    )
+
+    if (-not $Condition) {
+        throw "$Name failed. expected condition to be true."
+    }
+}
+
 function Get-KeyFunction {
     param([Parameter(Mandatory = $true)][string]$Key)
     $handler = Get-PSReadLineKeyHandler -Key $Key
@@ -84,7 +98,31 @@ $renderResult = & $module { & $script:RenderAction; 'render-ok' }
 Assert-Equal -Name 'RenderAction invocation' -Actual $renderResult -Expected 'render-ok'
 Write-Host "  PASS: render action executes"
 
-Write-Host "[4/4] Validating key binding restore after remove..."
+Write-Host "[4/5] Validating immediate-key throttle bypass edge case..."
+$throttleCheck = & $module {
+    $script:EnableTelemetry = $true
+    $script:Perf.Throttled = 0
+
+    $script:LastRenderTick = [Environment]::TickCount64
+    $printableKey = [System.ConsoleKeyInfo]::new('a', [System.ConsoleKey]::A, $false, $false, $false)
+    & $script:RenderAction $printableKey
+    $afterPrintable = [int]$script:Perf.Throttled
+
+    $script:LastRenderTick = [Environment]::TickCount64
+    $spaceKey = [System.ConsoleKeyInfo]::new(' ', [System.ConsoleKey]::Spacebar, $false, $false, $false)
+    & $script:RenderAction $spaceKey
+    $afterSpace = [int]$script:Perf.Throttled
+
+    [pscustomobject]@{
+        Printable = $afterPrintable
+        Space = $afterSpace
+    }
+}
+Assert-True -Name 'Printable key should be throttle-eligible at 0ms elapsed' -Condition ($throttleCheck.Printable -ge 1)
+Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck.Space) -Expected ([string]$throttleCheck.Printable)
+Write-Host "  PASS: immediate-key throttle bypass works"
+
+Write-Host "[5/5] Validating key binding restore after remove..."
 Remove-Module $moduleName -ErrorAction Stop
 foreach ($k in $expectedDefault.Keys) {
     Assert-Equal -Name "Default key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected $expectedDefault[$k]
