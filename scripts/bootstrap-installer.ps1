@@ -3,9 +3,11 @@
     Bootstrap installer for pwsh-syntax-highlighting module.
 .DESCRIPTION
     Downloads and installs pwsh-syntax-highlighting from GitHub to the current user's module path.
-    Supports interactive menu, direct install, and direct uninstall modes.
+    Supports interactive menu, direct install, direct update, and direct uninstall modes.
 .PARAMETER Install
     If specified, install the module without prompting.
+.PARAMETER Update
+    If specified, update an existing installation without prompting.
 .PARAMETER Uninstall
     If specified, uninstall the module without prompting.
 .PARAMETER NoProfileUpdate
@@ -20,6 +22,7 @@
 [CmdletBinding()]
 param(
     [switch]$Install,
+    [switch]$Update,
     [switch]$Uninstall,
     [switch]$NoProfileUpdate,
     [ValidateNotNullOrEmpty()]
@@ -166,11 +169,24 @@ function Uninstall-ModuleLocal {
     Write-Good "Uninstalled $moduleName from current user scope."
 }
 
+function Update-ModuleLocal {
+    if (Test-Path -LiteralPath $moduleRoot) {
+        $currentVersion = try { (Get-Module -Name $moduleName -ErrorAction Stop).Version } catch { 'unknown' }
+        Write-Info "Current version: $currentVersion"
+    }
+
+    Install-FromZip
+
+    $newVersion = try { (Get-Module -Name $moduleName -ErrorAction Stop).Version } catch { 'unknown' }
+    Write-Good "Updated to version: $newVersion"
+}
+
 function Start-Menu {
     Write-Host ''
     Write-Host 'pwsh-syntax-highlighting bootstrap' -ForegroundColor Magenta
     Write-Host '1) Install to current user + autoload in profile'
-    Write-Host '2) Uninstall from current user + remove profile autoload'
+    Write-Host '2) Update existing installation'
+    Write-Host '3) Uninstall from current user + remove profile autoload'
     Write-Host 'Q) Quit'
     Write-Host ''
 
@@ -180,7 +196,11 @@ function Start-Menu {
             Install-FromZip
             break
         }
-        '^(2|u|uninstall)$' {
+        '^(2|u|update)$' {
+            Update-ModuleLocal
+            break
+        }
+        '^(3|uninstall)$' {
             Uninstall-ModuleLocal
             break
         }
@@ -195,12 +215,19 @@ function Start-Menu {
     }
 }
 
-if ($Install -and $Uninstall) {
-    throw 'Use either -Install or -Uninstall, not both.'
+if ($Install -and ($Uninstall -or $Update)) {
+    throw 'Use only one of -Install, -Update, or -Uninstall.'
+}
+
+if ($Uninstall -and $Update) {
+    throw 'Use only one of -Install, -Update, or -Uninstall.'
 }
 
 if ($Install) {
     Install-FromZip
+}
+elseif ($Update) {
+    Update-ModuleLocal
 }
 elseif ($Uninstall) {
     Uninstall-ModuleLocal
