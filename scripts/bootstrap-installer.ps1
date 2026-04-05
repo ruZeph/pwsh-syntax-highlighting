@@ -138,7 +138,9 @@ function Install-FromZip {
 
     $null = Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force
 
-    Remove-Module $moduleName
+    if (Get-Module -Name $moduleName) {
+        Remove-Module $moduleName
+    }
     Import-Module $moduleName -Force
 
     Add-ProfileImport
@@ -148,7 +150,9 @@ function Install-FromZip {
 }
 
 function Uninstall-ModuleLocal {
-    Remove-Module $moduleName
+    if (Get-Module -Name $moduleName) {
+        Remove-Module $moduleName
+    }
 
     if (Test-Path -LiteralPath $moduleRoot) {
         Remove-Item -LiteralPath $moduleRoot -Recurse -Force
