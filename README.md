@@ -17,7 +17,8 @@ Use of AI-assisted software is entirely your choice. You can use or avoid this p
 
 - Fork notice: this repository is a fork of <https://github.com/digitalguy99/pwsh-syntax-highlighting>
 - Maintainer: <https://github.com/ruZeph>
-- Project type: hobby project focused on practical PowerShell UX improvements
+- Project type: **hobby project for personal use**; this is a voluntary effort to maintain an active fork with quality-of-life improvements
+- Status: Actively maintained with a focus on reliability and diagnostic tooling
 
 ## Why This Fork Exists
 
@@ -45,7 +46,8 @@ The menu supports:
 - Install to current user module path
 - Update existing installation
 - Automatic profile autoload
-- Uninstall and profile cleanup
+- Advanced runtime flag configuration
+- Complete uninstall with environment cleanup
 
 ### Option B: Local dev import (when you already have the folder)
 
@@ -79,6 +81,53 @@ This fork of pwsh-syntax-highlighting includes several enhancements over the ori
 - Preflight checks validate PSReadLine availability and required methods
 - Key handler registration wrapped in try/catch to prevent uninstall failures
 - Graceful fallback to degraded mode instead of hard failures
+
+## Customization
+
+### Color Themes
+
+The module supports custom color schemes. After installing, add this to your PowerShell profile (after the `Import-Module` line):
+
+```powershell
+if (Get-Module pwsh-syntax-highlighting) {
+    $module = Get-Module pwsh-syntax-highlighting
+    $colors = @{
+        ValidCommand   = [System.ConsoleColor]::Green       # Edit as needed
+        InvalidCommand = [System.ConsoleColor]::Red         # Edit as needed
+    }
+    & $module { param($c); $script:Styles = $c } $colors
+}
+```
+
+See [scripts/example-custom-theme.ps1](scripts/example-custom-theme.ps1) for a complete template.
+
+### Runtime Flags via Bootstrap
+
+Enable common features during installation:
+
+```powershell
+# Install with metrics and debug enabled
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | 
+    iex -ArgumentList @('-Install', '-EnableMetrics', '-EnableDebug')
+
+# Or add flags via menu: install → then manually add to profile
+# Environment will be persisted to your user profile
+```
+
+Supported bootstrap flags:
+
+- `-EnableMetrics`: Enable `$SyntaxHighlightingMetrics` collection
+- `-EnableDebug`: Enable `$SyntaxHighlightingDebugTrace` debug logging
+- `-SafeMode`: Enable safe mode with reduced keymap
+
+### Cleanup Options
+
+The uninstall function now cleans up all related environment variables and profile entries:
+
+```powershell
+irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scripts/bootstrap-installer.ps1' | 
+    iex -ArgumentList @('-Uninstall')
+```
 
 ## Known Limitations
 
@@ -133,7 +182,7 @@ Planned optimizations inspired by zsh-syntax-highlighting's architecture:
 - Pluggable highlighter system to allow users to enable/disable specific highlighting rules
 - Async/background command validation via background jobs  
 - Incremental token painting (only repaint changed tokens, not entire buffer)
-- User-configurable highlighting semantics and color schemes
+- Additional pre-built color themes and automatic theme detection
 
 ## Validation and Benchmark
 

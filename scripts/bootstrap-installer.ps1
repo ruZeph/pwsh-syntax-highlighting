@@ -18,6 +18,12 @@
     GitHub repository name; defaults to 'pwsh-syntax-highlighting'.
 .PARAMETER Branch
     Git branch to download; defaults to 'main'.
+.PARAMETER EnableMetrics
+    If specified, enable runtime metrics collection (PWSH_SYNTAX_HIGHLIGHTING_METRICS=1).
+.PARAMETER EnableDebug
+    If specified, enable debug trace logging (PWSH_SYNTAX_HIGHLIGHTING_DEBUG=1).
+.PARAMETER SafeMode
+    If specified, enable safe mode with reduced keymap (PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE=1).
 #>
 [CmdletBinding()]
 param(
@@ -25,6 +31,9 @@ param(
     [switch]$Update,
     [switch]$Uninstall,
     [switch]$NoProfileUpdate,
+    [switch]$EnableMetrics,
+    [switch]$EnableDebug,
+    [switch]$SafeMode,
     [ValidateNotNullOrEmpty()]
     [string]$RepoOwner = 'ruZeph',
     [ValidateNotNullOrEmpty()]
@@ -84,6 +93,32 @@ function Add-ProfileImport {
     else {
         Write-Info 'Profile already contains autoload line.'
     }
+
+    # Add runtime flag environment variables if requested
+    if ($EnableMetrics -or $EnableDebug -or $SafeMode) {
+        Add-RuntimeFlags -ProfilePath $profilePath
+    }
+}
+
+function Add-RuntimeFlags {
+    param([string]$ProfilePath)
+
+    $flagLines = @()
+    if ($EnableMetrics) {
+        $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_METRICS", "1", "User")'
+        Write-Good "Enabled metrics collection"
+    }
+    if ($EnableDebug) {
+        $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_DEBUG", "1", "User")'
+        Write-Good "Enabled debug tracing"
+    }
+    if ($SafeMode) {
+        $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE", "1", "User")'
+        Write-Good "Enabled safe mode"
+    }
+
+    $flagContent = "`n# pwsh-syntax-highlighting runtime flags`n" + ($flagLines -join "`n")
+    Add-Content -LiteralPath $ProfilePath -Value $flagContent
 }
 
 function Remove-ProfileImport {
@@ -105,6 +140,12 @@ function Remove-ProfileImport {
     $escapedModuleName = [regex]::Escape($moduleName)
     $pattern = "Import-Module\s+['\`"]?$escapedModuleName['\`"]?"
     [string[]]$filtered = @($lines | Where-Object { $_ -notmatch $pattern })
+
+    # Also remove runtime flag environment variable setters
+    $filtered = @($filtered | Where-Object { 
+            $_ -notmatch 'PWSH_SYNTAX_HIGHLIGHTING' -and
+            $_ -notmatch '# pwsh-syntax-highlighting runtime flags'
+        })
 
     if ($filtered.Count -gt 0) {
         Set-Content -LiteralPath $profilePath -Value $filtered
@@ -152,6 +193,22 @@ function Install-FromZip {
     Write-Good 'Module imported for current session.'
 }
 
+function Remove-RuntimeEnvironmentVariables {
+    Write-Info "Cleaning up runtime environment variables..."
+    try {
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_METRICS', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_DEBUG', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET', $null, 'User')
+        Write-Good "Cleaned up environment variables"
+    }
+    catch {
+        Write-WarnMsg "Could not clean some environment variables: $($_)"
+    }
+}
+
 function Uninstall-ModuleLocal {
     if (Get-Module -Name $moduleName) {
         Remove-Module $moduleName
@@ -166,6 +223,7 @@ function Uninstall-ModuleLocal {
     }
 
     Remove-ProfileImport
+    Remove-RuntimeEnvironmentVariables
     Write-Good "Uninstalled $moduleName from current user scope."
 }
 
