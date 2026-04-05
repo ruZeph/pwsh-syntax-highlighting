@@ -137,426 +137,431 @@ function Get-RemoteVersion {
     try {
         Write-Info "Checking remote version..."
         $manifestContent = Invoke-WebRequest -Uri $manifestUrl -ErrorAction Stop -TimeoutSec 5 | Select-Object -ExpandProperty Content
-        if ($manifestContent -match "ModuleVersion\s*=\s*['\"]([^'\"]+)['\"]")
-            {
-                return $matches[1]
-            }
-            return $null
+        $pattern = 'ModuleVersion\s*=\s*[''"]([^''\"]+)[''"]'
+        if ($manifestContent -match $pattern) {
+            return $matches[1]
         }
-        catch {
-            return $null
-        }
+        return $null
     }
+    catch {
+        return $null
+    }
+}
 
-    function Test-UpdateAvailable {
-        $remoteVersion = Get-RemoteVersion
-        if ($null -eq $remoteVersion) {
-            return $false
-        }
-    
-        $localVer = [version]$localVersion
-        $remoteVer = [version]$remoteVersion
-    
-        if ($remoteVer -gt $localVer) {
-            Write-WarnMsg "Newer version available: $remoteVersion (currently installed: $localVersion)"
-            return $true
-        }
+function Test-UpdateAvailable {
+    $remoteVersion = Get-RemoteVersion
+    if ($null -eq $remoteVersion) {
         return $false
     }
-
-    function Test-InstallationExists {
-        param([switch]$Verbose)
     
-        if (Test-Path -LiteralPath $moduleRoot) {
-            if ($Verbose) {
-                $versionInfo = try { (Get-Module -Name $moduleName -ErrorAction Stop).Version } catch { 'unknown' }
-                Write-WarnMsg "Existing installation found at: $moduleRoot (version: $versionInfo)"
-            }
-            return $true
-        }
-        return $false
-    }
-
-    function Test-ModuleLoaded {
-        return $null -ne (Get-Module -Name $moduleName -ErrorAction SilentlyContinue)
-    }
-
-    function Initialize-ProfileDirectory {
-        param([string]$ProfilePath)
+    $localVer = [version]$localVersion
+    $remoteVer = [version]$remoteVersion
     
-        $profileDir = Split-Path -Parent $profilePath
-        if (-not (Test-Path -LiteralPath $profileDir)) {
-            try {
-                $null = New-Item -Path $profileDir -ItemType Directory -Force -ErrorAction Stop
-                Write-Good "Created profile directory: $profileDir"
-            }
-            catch {
-                Write-ErrorMsg "Failed to create profile directory: $_"
-                throw
-            }
-        }
-
-        if (-not (Test-Path -LiteralPath $profilePath)) {
-            try {
-                $null = New-Item -Path $profilePath -ItemType File -Force -ErrorAction Stop
-                Write-Good "Created profile file: $profilePath"
-            }
-            catch {
-                Write-ErrorMsg "Failed to create profile file: $_"
-                throw
-            }
-        }
+    if ($remoteVer -gt $localVer) {
+        Write-WarnMsg "Newer version available: $remoteVersion (currently installed: $localVersion)"
+        return $true
     }
+    return $false
+}
 
-    function Add-ProfileImport {
-        if ($NoProfileUpdate) {
-            Write-Info 'Skipping profile update due to -NoProfileUpdate.'
-            return
-        }
-
-        $profilePath = $PROFILE.CurrentUserCurrentHost
+function Test-InstallationExists {
+    param([switch]$Verbose)
     
-        # Initialize profile directory and file if needed
-        Initialize-ProfileDirectory -ProfilePath $profilePath
-
-        # Check write permission
-        if (-not (Test-WritePermission -Path (Split-Path -Parent $profilePath))) {
-            Write-ErrorMsg "Cannot write to profile directory. Check permissions."
-            throw "Profile write permission denied"
+    if (Test-Path -LiteralPath $moduleRoot) {
+        if ($Verbose) {
+            $versionInfo = try { (Get-Module -Name $moduleName -ErrorAction Stop).Version } catch { 'unknown' }
+            Write-WarnMsg "Existing installation found at: $moduleRoot (version: $versionInfo)"
         }
+        return $true
+    }
+    return $false
+}
 
-        # Backup before modification
-        $backupPath = Backup-ProfileFile -ProfilePath $profilePath
+function Test-ModuleLoaded {
+    return $null -ne (Get-Module -Name $moduleName -ErrorAction SilentlyContinue)
+}
 
+function Initialize-ProfileDirectory {
+    param([string]$ProfilePath)
+    
+    $profileDir = Split-Path -Parent $profilePath
+    if (-not (Test-Path -LiteralPath $profileDir)) {
         try {
-            $profileContent = Get-Content -LiteralPath $profilePath -Raw -ErrorAction SilentlyContinue
-            if ([string]::IsNullOrEmpty($profileContent)) {
-                $profileContent = ''
-            }
-
-            if ($profileContent -notmatch [regex]::Escape($profileImportLine)) {
-                Add-Content -LiteralPath $profilePath -Value "`n$profileImportLine" -ErrorAction Stop
-                Write-Good "Added module autoload to profile: $profilePath"
-            }
-            else {
-                Write-Info 'Profile already contains autoload line.'
-            }
-
-            # Add runtime flags if any are enabled
-            if ($script:EnableMetrics -or $script:EnableDebug -or $script:SafeMode) {
-                Add-RuntimeFlags -ProfilePath $profilePath
-            }
+            $null = New-Item -Path $profileDir -ItemType Directory -Force -ErrorAction Stop
+            Write-Good "Created profile directory: $profileDir"
         }
         catch {
-            Write-ErrorMsg "Failed to update profile: $_"
-            if ($backupPath) {
-                Write-Info "Restoring profile from backup..."
-                Copy-Item -LiteralPath $backupPath -Destination $profilePath -Force -ErrorAction SilentlyContinue
-            }
+            Write-ErrorMsg "Failed to create profile directory: $_"
             throw
         }
     }
 
-    function Add-RuntimeFlags {
-        param([string]$ProfilePath)
-
-        $flagLines = @()
-        if ($script:EnableMetrics) {
-            $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_METRICS", "1", "User")'
-        }
-        if ($script:EnableDebug) {
-            $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_DEBUG", "1", "User")'
-        }
-        if ($script:SafeMode) {
-            $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE", "1", "User")'
-        }
-
-        if ($flagLines.Count -gt 0) {
-            $flagContent = "`n# pwsh-syntax-highlighting runtime flags`n" + ($flagLines -join "`n")
-            Add-Content -LiteralPath $ProfilePath -Value $flagContent -ErrorAction Stop
-            Write-Good "Runtime flags configured:"
-            if ($script:EnableMetrics) { Write-Host "  [X] Metrics collection enabled" -ForegroundColor Green }
-            if ($script:EnableDebug) { Write-Host "  [X] Debug tracing enabled" -ForegroundColor Green }
-            if ($script:SafeMode) { Write-Host "  [X] Safe mode enabled" -ForegroundColor Green }
-        }
-    }
-
-    function Show-FlagMenu {
-        while ($true) {
-            Write-Host ''
-            Write-Host 'Configure Runtime Flags' -ForegroundColor Cyan
-            Write-Host "1) Metrics collection      $($script:EnableMetrics ? '[X]' : '[ ]')"
-            Write-Host "2) Debug tracing           $($script:EnableDebug ? '[X]' : '[ ]')"
-            Write-Host "3) Safe mode               $($script:SafeMode ? '[X]' : '[ ]')"
-            Write-Host 'B) Back to main menu'
-            Write-Host ''
-
-            $choice = Read-Host 'Select option'
-            switch -Regex ($choice) {
-                '^1$' {
-                    $script:EnableMetrics = -not $script:EnableMetrics
-                    Write-Good "Metrics collection $(if ($script:EnableMetrics) { 'enabled' } else { 'disabled' })"
-                    break
-                }
-                '^2$' {
-                    $script:EnableDebug = -not $script:EnableDebug
-                    Write-Good "Debug tracing $(if ($script:EnableDebug) { 'enabled' } else { 'disabled' })"
-                    break
-                }
-                '^3$' {
-                    $script:SafeMode = -not $script:SafeMode
-                    Write-Good "Safe mode $(if ($script:SafeMode) { 'enabled' } else { 'disabled' })"
-                    break
-                }
-                '^(b|back)$' {
-                    return
-                }
-                default {
-                    Write-WarnMsg 'Invalid selection.'
-                    break
-                }
-            }
-        }
-    }
-
-    function Remove-ProfileImport {
-        $profilePath = $PROFILE.CurrentUserCurrentHost
-        if (-not (Test-Path -LiteralPath $profilePath)) {
-            return
-        }
-
-        $backupPath = Backup-ProfileFile -ProfilePath $profilePath
-
+    if (-not (Test-Path -LiteralPath $profilePath)) {
         try {
-            [string[]]$lines = @(Get-Content -LiteralPath $profilePath -ErrorAction Stop)
-            if ($null -eq $lines -or $lines.Count -eq 0) {
-                return
-            }
-
-            $escapedModuleName = [regex]::Escape($moduleName)
-            $pattern = "Import-Module\s+['\`"]?$escapedModuleName['\`"]?"
-            [string[]]$filtered = @($lines | Where-Object { $_ -notmatch $pattern })
-
-            # Also remove runtime flag environment variable setters
-            $filtered = @($filtered | Where-Object { 
-                    $_ -notmatch 'PWSH_SYNTAX_HIGHLIGHTING' -and
-                    $_ -notmatch '# pwsh-syntax-highlighting runtime flags'
-                })
-
-            if ($filtered.Count -gt 0) {
-                Set-Content -LiteralPath $profilePath -Value $filtered -ErrorAction Stop
-            }
-
-            Write-Good "Removed module autoload entries from profile"
+            $null = New-Item -Path $profilePath -ItemType File -Force -ErrorAction Stop
+            Write-Good "Created profile file: $profilePath"
         }
         catch {
-            Write-ErrorMsg "Failed to update profile: $_"
-            if ($backupPath) {
-                Write-Info "Restoring profile from backup..."
-                Copy-Item -LiteralPath $backupPath -Destination $profilePath -Force -ErrorAction SilentlyContinue
-            }
+            Write-ErrorMsg "Failed to create profile file: $_"
             throw
         }
     }
+}
 
-    function Install-FromZip {
-        # Safety checks
-        if (-not (Test-InternetConnectivity)) {
-            throw "No internet connectivity"
+function Add-ProfileImport {
+    if ($NoProfileUpdate) {
+        Write-Info 'Skipping profile update due to -NoProfileUpdate.'
+        return
+    }
+
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    
+    # Initialize profile directory and file if needed
+    Initialize-ProfileDirectory -ProfilePath $profilePath
+
+    # Check write permission
+    if (-not (Test-WritePermission -Path (Split-Path -Parent $profilePath))) {
+        Write-ErrorMsg "Cannot write to profile directory. Check permissions."
+        throw "Profile write permission denied"
+    }
+
+    # Backup before modification
+    $backupPath = Backup-ProfileFile -ProfilePath $profilePath
+
+    try {
+        $profileContent = Get-Content -LiteralPath $profilePath -Raw -ErrorAction SilentlyContinue
+        if ([string]::IsNullOrEmpty($profileContent)) {
+            $profileContent = ''
         }
 
-        if (Test-ModuleLoaded) {
-            Write-WarnMsg "Module is currently loaded in this session"
-            if (-not (Get-UserConfirmation -Title "Module Loaded" -Message "Continue with installation? It will be reloaded." -YesDescription "Continue" -NoDescription "Cancel")) {
-                Write-Info "Installation cancelled"
+        if ($profileContent -notmatch [regex]::Escape($profileImportLine)) {
+            Add-Content -LiteralPath $profilePath -Value "`n$profileImportLine" -ErrorAction Stop
+            Write-Good "Added module autoload to profile: $profilePath"
+        }
+        else {
+            Write-Info 'Profile already contains autoload line.'
+        }
+
+        # Add runtime flags if any are enabled
+        if ($script:EnableMetrics -or $script:EnableDebug -or $script:SafeMode) {
+            Add-RuntimeFlags -ProfilePath $profilePath
+        }
+    }
+    catch {
+        Write-ErrorMsg "Failed to update profile: $_"
+        if ($backupPath) {
+            Write-Info "Restoring profile from backup..."
+            Copy-Item -LiteralPath $backupPath -Destination $profilePath -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+}
+
+function Add-RuntimeFlags {
+    param([string]$ProfilePath)
+
+    $flagLines = @()
+    if ($script:EnableMetrics) {
+        $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_METRICS", "1", "User")'
+    }
+    if ($script:EnableDebug) {
+        $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_DEBUG", "1", "User")'
+    }
+    if ($script:SafeMode) {
+        $flagLines += '[Environment]::SetEnvironmentVariable("PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE", "1", "User")'
+    }
+
+    if ($flagLines.Count -gt 0) {
+        $flagContent = "`n# pwsh-syntax-highlighting runtime flags`n" + ($flagLines -join "`n")
+        Add-Content -LiteralPath $ProfilePath -Value $flagContent -ErrorAction Stop
+        Write-Good "Runtime flags configured:"
+        if ($script:EnableMetrics) { Write-Host "  [X] Metrics collection enabled" -ForegroundColor Green }
+        if ($script:EnableDebug) { Write-Host "  [X] Debug tracing enabled" -ForegroundColor Green }
+        if ($script:SafeMode) { Write-Host "  [X] Safe mode enabled" -ForegroundColor Green }
+    }
+}
+
+function Show-FlagMenu {
+    while ($true) {
+        Write-Host ''
+        Write-Host 'Configure Runtime Flags' -ForegroundColor Cyan
+            
+        $metricsStatus = if ($script:EnableMetrics) { '[X]' } else { '[ ]' }
+        $debugStatus = if ($script:EnableDebug) { '[X]' } else { '[ ]' }
+        $safeModeStatus = if ($script:SafeMode) { '[X]' } else { '[ ]' }
+            
+        Write-Host "1) Metrics collection      $metricsStatus"
+        Write-Host "2) Debug tracing           $debugStatus"
+        Write-Host "3) Safe mode               $safeModeStatus"
+        Write-Host 'B) Back to main menu'
+        Write-Host ''
+
+        $choice = Read-Host 'Select option'
+        switch -Regex ($choice) {
+            '^1$' {
+                $script:EnableMetrics = -not $script:EnableMetrics
+                Write-Good "Metrics collection $(if ($script:EnableMetrics) { 'enabled' } else { 'disabled' })"
+                break
+            }
+            '^2$' {
+                $script:EnableDebug = -not $script:EnableDebug
+                Write-Good "Debug tracing $(if ($script:EnableDebug) { 'enabled' } else { 'disabled' })"
+                break
+            }
+            '^3$' {
+                $script:SafeMode = -not $script:SafeMode
+                Write-Good "Safe mode $(if ($script:SafeMode) { 'enabled' } else { 'disabled' })"
+                break
+            }
+            '^(b|back)$' {
                 return
             }
-        }
-
-        if (Test-InstallationExists -Verbose) {
-            if (-not (Get-UserConfirmation -Title "Overwrite Existing Installation" -Message "An installation already exists. Overwrite it?" -YesDescription "Overwrite" -NoDescription "Cancel")) {
-                Write-Info "Installation cancelled"
-                return
+            default {
+                Write-WarnMsg 'Invalid selection.'
+                break
             }
         }
+    }
+}
 
-        $zipUrl = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Branch.zip"
-        $zipPath = Join-Path $env:TEMP "$RepoName-$Branch.zip"
-        $extractBase = Join-Path $env:TEMP "$RepoName-$Branch"
-        $expandedRoot = Join-Path $extractBase "$RepoName-$Branch"
+function Remove-ProfileImport {
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+    if (-not (Test-Path -LiteralPath $profilePath)) {
+        return
+    }
 
-        try {
-            Write-Info "Downloading: $zipUrl"
-            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -ErrorAction Stop
+    $backupPath = Backup-ProfileFile -ProfilePath $profilePath
 
-            if (Test-Path -LiteralPath $extractBase) {
-                Remove-Item -LiteralPath $extractBase -Recurse -Force -ErrorAction SilentlyContinue
-            }
-
-            Expand-Archive -Path $zipPath -DestinationPath $extractBase -Force -ErrorAction Stop
-
-            if (-not (Test-Path -LiteralPath $expandedRoot)) {
-                throw "Expanded folder not found: $expandedRoot"
-            }
-
-            if (-not (Test-Path -LiteralPath $moduleRoot)) {
-                $null = New-Item -Path $moduleRoot -ItemType Directory -Force -ErrorAction Stop
-            }
-
-            # Check write permission before clearing
-            if (-not (Test-WritePermission -Path $moduleRoot)) {
-                throw "No write permission to module directory"
-            }
-
-            Get-ChildItem -LiteralPath $moduleRoot -Force -ErrorAction SilentlyContinue |
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-            $null = Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force -ErrorAction Stop
-
-            if (Test-ModuleLoaded) {
-                Remove-Module $moduleName -ErrorAction SilentlyContinue
-            }
-            Import-Module $moduleName -Force -ErrorAction Stop
-
-            Add-ProfileImport
-
-            Write-Good "Successfully installed $moduleName to: $moduleRoot"
-            Write-Good 'Module imported for current session.'
+    try {
+        [string[]]$lines = @(Get-Content -LiteralPath $profilePath -ErrorAction Stop)
+        if ($null -eq $lines -or $lines.Count -eq 0) {
+            return
         }
-        finally {
-            # Clean up temp files
-            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+        $escapedModuleName = [regex]::Escape($moduleName)
+        $pattern = "Import-Module\s+['\`"]?$escapedModuleName['\`"]?"
+        [string[]]$filtered = @($lines | Where-Object { $_ -notmatch $pattern })
+
+        # Also remove runtime flag environment variable setters
+        $filtered = @($filtered | Where-Object { 
+                $_ -notmatch 'PWSH_SYNTAX_HIGHLIGHTING' -and
+                $_ -notmatch '# pwsh-syntax-highlighting runtime flags'
+            })
+
+        if ($filtered.Count -gt 0) {
+            Set-Content -LiteralPath $profilePath -Value $filtered -ErrorAction Stop
+        }
+
+        Write-Good "Removed module autoload entries from profile"
+    }
+    catch {
+        Write-ErrorMsg "Failed to update profile: $_"
+        if ($backupPath) {
+            Write-Info "Restoring profile from backup..."
+            Copy-Item -LiteralPath $backupPath -Destination $profilePath -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+}
+
+function Install-FromZip {
+    # Safety checks
+    if (-not (Test-InternetConnectivity)) {
+        throw "No internet connectivity"
+    }
+
+    if (Test-ModuleLoaded) {
+        Write-WarnMsg "Module is currently loaded in this session"
+        if (-not (Get-UserConfirmation -Title "Module Loaded" -Message "Continue with installation? It will be reloaded." -YesDescription "Continue" -NoDescription "Cancel")) {
+            Write-Info "Installation cancelled"
+            return
+        }
+    }
+
+    if (Test-InstallationExists -Verbose) {
+        if (-not (Get-UserConfirmation -Title "Overwrite Existing Installation" -Message "An installation already exists. Overwrite it?" -YesDescription "Overwrite" -NoDescription "Cancel")) {
+            Write-Info "Installation cancelled"
+            return
+        }
+    }
+
+    $zipUrl = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Branch.zip"
+    $zipPath = Join-Path $env:TEMP "$RepoName-$Branch.zip"
+    $extractBase = Join-Path $env:TEMP "$RepoName-$Branch"
+    $expandedRoot = Join-Path $extractBase "$RepoName-$Branch"
+
+    try {
+        Write-Info "Downloading: $zipUrl"
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -ErrorAction Stop
+
+        if (Test-Path -LiteralPath $extractBase) {
             Remove-Item -LiteralPath $extractBase -Recurse -Force -ErrorAction SilentlyContinue
         }
-    }
 
-    function Remove-RuntimeEnvironmentVariables {
-        Write-Info "Cleaning up runtime environment variables..."
-        try {
-            [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_METRICS', $null, 'User')
-            [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_DEBUG', $null, 'User')
-            [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE', $null, 'User')
-            [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH', $null, 'User')
-            [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH', $null, 'User')
-            [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET', $null, 'User')
-            Write-Good "Cleaned up environment variables"
-        }
-        catch {
-            Write-WarnMsg "Could not clean some environment variables: $_"
-        }
-    }
+        Expand-Archive -Path $zipPath -DestinationPath $extractBase -Force -ErrorAction Stop
 
-    function Uninstall-ModuleLocal {
+        if (-not (Test-Path -LiteralPath $expandedRoot)) {
+            throw "Expanded folder not found: $expandedRoot"
+        }
+
+        if (-not (Test-Path -LiteralPath $moduleRoot)) {
+            $null = New-Item -Path $moduleRoot -ItemType Directory -Force -ErrorAction Stop
+        }
+
+        # Check write permission before clearing
+        if (-not (Test-WritePermission -Path $moduleRoot)) {
+            throw "No write permission to module directory"
+        }
+
+        Get-ChildItem -LiteralPath $moduleRoot -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+        $null = Copy-Item -Path (Join-Path $expandedRoot '*') -Destination $moduleRoot -Recurse -Force -ErrorAction Stop
+
         if (Test-ModuleLoaded) {
-            Write-WarnMsg "Module is currently loaded in this session"
+            Remove-Module $moduleName -ErrorAction SilentlyContinue
         }
+        Import-Module $moduleName -Force -ErrorAction Stop
 
-        if (-not (Test-InstallationExists)) {
-            Write-WarnMsg "No installation found at: $moduleRoot"
-            return
-        }
+        Add-ProfileImport
 
-        if (-not (Get-UserConfirmation -Title "Confirm Uninstall" -Message "Remove $moduleName and all related configurations?" -YesDescription "Uninstall" -NoDescription "Cancel")) {
-            Write-Info "Uninstall cancelled"
-            return
-        }
+        Write-Good "Successfully installed $moduleName to: $moduleRoot"
+        Write-Good 'Module imported for current session.'
+    }
+    finally {
+        # Clean up temp files
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $extractBase -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
-        try {
-            if (Test-ModuleLoaded) {
-                Remove-Module $moduleName -ErrorAction SilentlyContinue
-            }
+function Remove-RuntimeEnvironmentVariables {
+    Write-Info "Cleaning up runtime environment variables..."
+    try {
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_METRICS', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_DEBUG', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH', $null, 'User')
+        [Environment]::SetEnvironmentVariable('PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET', $null, 'User')
+        Write-Good "Cleaned up environment variables"
+    }
+    catch {
+        Write-WarnMsg "Could not clean some environment variables: $_"
+    }
+}
 
-            if (Test-Path -LiteralPath $moduleRoot) {
-                Remove-Item -LiteralPath $moduleRoot -Recurse -Force -ErrorAction Stop
-                Write-Good "Removed module directory: $moduleRoot"
-            }
-
-            Remove-ProfileImport
-            Remove-RuntimeEnvironmentVariables
-            Write-Good "Successfully uninstalled $moduleName"
-        }
-        catch {
-            Write-ErrorMsg "Uninstall failed: $_"
-            throw
-        }
+function Uninstall-ModuleLocal {
+    if (Test-ModuleLoaded) {
+        Write-WarnMsg "Module is currently loaded in this session"
     }
 
-    function Update-ModuleLocal {
-        if (-not (Test-InstallationExists -Verbose)) {
-            Write-WarnMsg "No existing installation found"
-            if (-not (Get-UserConfirmation -Title "Installation Not Found" -Message "Perform new installation instead?" -YesDescription "Install" -NoDescription "Cancel")) {
-                Write-Info "Update cancelled"
+    if (-not (Test-InstallationExists)) {
+        Write-WarnMsg "No installation found at: $moduleRoot"
+        return
+    }
+
+    if (-not (Get-UserConfirmation -Title "Confirm Uninstall" -Message "Remove $moduleName and all related configurations?" -YesDescription "Uninstall" -NoDescription "Cancel")) {
+        Write-Info "Uninstall cancelled"
+        return
+    }
+
+    try {
+        if (Test-ModuleLoaded) {
+            Remove-Module $moduleName -ErrorAction SilentlyContinue
+        }
+
+        if (Test-Path -LiteralPath $moduleRoot) {
+            Remove-Item -LiteralPath $moduleRoot -Recurse -Force -ErrorAction Stop
+            Write-Good "Removed module directory: $moduleRoot"
+        }
+
+        Remove-ProfileImport
+        Remove-RuntimeEnvironmentVariables
+        Write-Good "Successfully uninstalled $moduleName"
+    }
+    catch {
+        Write-ErrorMsg "Uninstall failed: $_"
+        throw
+    }
+}
+
+function Update-ModuleLocal {
+    if (-not (Test-InstallationExists -Verbose)) {
+        Write-WarnMsg "No existing installation found"
+        if (-not (Get-UserConfirmation -Title "Installation Not Found" -Message "Perform new installation instead?" -YesDescription "Install" -NoDescription "Cancel")) {
+            Write-Info "Update cancelled"
+            return
+        }
+        Install-FromZip
+        return
+    }
+
+    Write-Info "Updating module..."
+    Install-FromZip
+}
+
+function Start-Menu {
+    while ($true) {
+        Write-Host ''
+        Write-Host 'pwsh-syntax-highlighting installer' -ForegroundColor Magenta
+        Write-Host "Version: $localVersion" -ForegroundColor Cyan
+        
+        # Check for updates (non-blocking)
+        $null = Test-UpdateAvailable
+        
+        Write-Host '1) Install to current user + autoload in profile'
+        Write-Host '2) Update existing installation'
+        Write-Host '3) Configure runtime flags'
+        Write-Host '4) Uninstall from current user + remove profile autoload'
+        Write-Host 'Q) Quit'
+        Write-Host ''
+
+        $choice = Read-Host 'Select an option'
+        switch -Regex ($choice) {
+            '^(1|i|install)$' {
+                Install-FromZip
                 return
             }
-            Install-FromZip
-            return
-        }
-
-        Write-Info "Updating module..."
-        Install-FromZip
-    }
-
-    function Start-Menu {
-        while ($true) {
-            Write-Host ''
-            Write-Host 'pwsh-syntax-highlighting installer' -ForegroundColor Magenta
-            Write-Host "Version: $localVersion" -ForegroundColor Cyan
-        
-            # Check for updates (non-blocking)
-            $null = Test-UpdateAvailable
-        
-            Write-Host '1) Install to current user + autoload in profile'
-            Write-Host '2) Update existing installation'
-            Write-Host '3) Configure runtime flags'
-            Write-Host '4) Uninstall from current user + remove profile autoload'
-            Write-Host 'Q) Quit'
-            Write-Host ''
-
-            $choice = Read-Host 'Select an option'
-            switch -Regex ($choice) {
-                '^(1|i|install)$' {
-                    Install-FromZip
-                    return
-                }
-                '^(2|u|update)$' {
-                    Update-ModuleLocal
-                    return
-                }
-                '^(3|f|flags)$' {
-                    Show-FlagMenu
-                }
-                '^(4|uninstall)$' {
-                    Uninstall-ModuleLocal
-                    return
-                }
-                '^(q|quit)$' {
-                    Write-Info 'No changes made.'
-                    return
-                }
-                default {
-                    Write-WarnMsg 'Invalid selection. No changes made.'
-                }
+            '^(2|u|update)$' {
+                Update-ModuleLocal
+                return
+            }
+            '^(3|f|flags)$' {
+                Show-FlagMenu
+            }
+            '^(4|uninstall)$' {
+                Uninstall-ModuleLocal
+                return
+            }
+            '^(q|quit)$' {
+                Write-Info 'No changes made.'
+                return
+            }
+            default {
+                Write-WarnMsg 'Invalid selection. No changes made.'
             }
         }
     }
+}
 
-    if ($Install -and ($Uninstall -or $Update)) {
-        throw 'Use only one of -Install, -Update, or -Uninstall.'
-    }
+if ($Install -and ($Uninstall -or $Update)) {
+    throw 'Use only one of -Install, -Update, or -Uninstall.'
+}
 
-    if ($Uninstall -and $Update) {
-        throw 'Use only one of -Install, -Update, or -Uninstall.'
-    }
+if ($Uninstall -and $Update) {
+    throw 'Use only one of -Install, -Update, or -Uninstall.'
+}
 
-    if ($Install) {
-        Install-FromZip
-    }
-    elseif ($Update) {
-        Update-ModuleLocal
-    }
-    elseif ($Uninstall) {
-        Uninstall-ModuleLocal
-    }
-    else {
-        Start-Menu
-    }
+if ($Install) {
+    Install-FromZip
+}
+elseif ($Update) {
+    Update-ModuleLocal
+}
+elseif ($Uninstall) {
+    Uninstall-ModuleLocal
+}
+else {
+    Start-Menu
+}
