@@ -95,11 +95,11 @@ Then re-import the module.
 Run all local checks and benchmark in one command:
 
 ```powershell
-.\validate-gate.ps1
+.\scripts\validate-gate.ps1
 ```
 
 Useful overrides:
 
 ```powershell
-.\validate-gate.ps1 -Cycles 100 -BenchmarkIterations 1000 -BenchmarkWarmup 200
+.\scripts\validate-gate.ps1 -Cycles 100 -BenchmarkIterations 1000 -BenchmarkWarmup 200
 ```

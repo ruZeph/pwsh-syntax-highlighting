@@ -9,7 +9,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$moduleManifest = Join-Path $PSScriptRoot 'syntax-highlighting.psd1'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$moduleManifest = Join-Path $repoRoot 'pwsh-syntax-highlighting.psd1'
 if (-not (Test-Path $moduleManifest)) {
     throw "Module manifest not found: $moduleManifest"
 }
@@ -51,7 +52,7 @@ function Invoke-RenderMeasure {
     )
 
     $samples = New-Object System.Collections.Generic.List[double]
-    $mod = Get-Module syntax-highlighting -ErrorAction Stop
+    $mod = Get-Module pwsh-syntax-highlighting -ErrorAction Stop
 
     for ($i = 0; $i -lt $Count; $i++) {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -65,7 +66,7 @@ function Invoke-RenderMeasure {
 
 Write-Host "Preparing benchmark environment..."
 $env:PWSH_SYNTAX_HIGHLIGHTING_METRICS = '1'
-Remove-Module syntax-highlighting -ErrorAction SilentlyContinue
+Remove-Module pwsh-syntax-highlighting -ErrorAction SilentlyContinue
 Import-Module $moduleManifest -Force
 
 if ($WarmupIterations -gt 0) {

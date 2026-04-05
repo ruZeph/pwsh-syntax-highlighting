@@ -1,5 +1,5 @@
 Set-Location "D:\MediaNData\Open Source Work\pwsh-syntax-highlighting"
-Remove-Module syntax-highlighting -ErrorAction Ignore
+Remove-Module pwsh-syntax-highlighting -ErrorAction Ignore
 
 $printable = [char[]](0x20..0x7e + 0xa0..0xff)
 foreach ($k in $printable) { Set-PSReadLineKeyHandler -Key $k -Function SelfInsert -ErrorAction SilentlyContinue }
@@ -13,4 +13,4 @@ Set-PSReadLineKeyHandler -Key Delete -Function DeleteChar -ErrorAction SilentlyC
 
 $env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG='1'
 $env:PWSH_SYNTAX_HIGHLIGHTING_METRICS='1'
-Import-Module ".\syntax-highlighting.psd1" -Force
+Import-Module ".\pwsh-syntax-highlighting.psd1" -Force

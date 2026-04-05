@@ -6,8 +6,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$moduleName = 'syntax-highlighting'
-$moduleManifest = Join-Path $PSScriptRoot 'syntax-highlighting.psd1'
+$moduleName = 'pwsh-syntax-highlighting'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$moduleManifest = Join-Path $repoRoot 'pwsh-syntax-highlighting.psd1'
 $env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG = '1'
 $keys = @('UpArrow', 'DownArrow', 'RightArrow', 'LeftArrow', 'Backspace', 'Delete')
 $expectedDefault = @{

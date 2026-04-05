@@ -1,44 +1,103 @@
+# AI Usage Disclosure
+
+This repository uses AI-assisted development for code generation, refactoring, diagnostics, test scaffolding, and documentation drafting. All AI output is reviewed and edited by a human maintainer before release.
+
 # pwsh-syntax-highlighting
-This project is inspired by the [zsh-syntax-highlighting](https://github.com/zsh-users/zsh-syntax-highlighting "Fish shell like syntax highlighting for Zsh") project.
 
-*Requirement: pwsh 5.1+*
+Interactive syntax highlighting and command validation for PowerShell.
 
-This package provides syntax highlighting for PowerShell. 
-It enables highlighting of commands whilst they are typed at a PowerShell prompt into an interactive terminal. 
-This helps in reviewing commands before running them, particularly in catching syntax errors.
+This project is inspired by zsh-syntax-highlighting:
+https://github.com/zsh-users/zsh-syntax-highlighting
 
-## Preview
+## Status
 
-https://github.com/user-attachments/assets/83cc42aa-e234-44b8-b0a3-251138afe71d
+- Project/repo naming aligned to pwsh-syntax-highlighting
+- Module manifest renamed to pwsh-syntax-highlighting.psd1
+- Module implementation moved into src/ for cleaner layout
+- Reliability tooling and hardening docs included
 
-## How to install
+## Requirements
 
-1. Run PowerShell as Administrator.
+- PowerShell 7+ recommended
+- PSReadLine enabled (default in modern PowerShell)
 
-2. Execute the following command:
+## Repository Structure
 
-    ```pwsh
-    Install-Module syntax-highlighting
-    ```
- 
-3. Run the following and restart PowerShell:
-   
-   ```pwsh
-   echo "Import-Module syntax-highlighting" >> $profile
-   ```
-   
-   so you don't have to import the module every time you open PowerShell.
-   
- ## Limitations
- 
-- Commands after a semicolon and second line commands will not be validated 
-- Only works with Windows and doesn't work on macOS/Linux
-- Doesn't validate commands that begin with a "#" well
+```text
+.
+|- docs/
+|  |- perf-and-hardening.md
+|- scripts/
+|  |- benchmark-render.ps1
+|  |- manual-test-setup-env.ps1
+|  |- validate-gate.ps1
+|- src/
+|  |- pwsh-syntax-highlighting.psm1
+|- tests/
+|  |- test-local.ps1
+|- LICENSE
+|- README.md
+|- pwsh-syntax-highlighting.psd1
+```
+
+## Quick Start (Local)
+
+```powershell
+Set-Location "<repo-root>"
+Remove-Module pwsh-syntax-highlighting -ErrorAction Ignore
+Import-Module .\pwsh-syntax-highlighting.psd1 -Force
+```
+
+Type commands directly in the prompt. The first command token is highlighted as valid or invalid while you edit.
+
+## Operational Flags
+
+- PWSH_SYNTAX_HIGHLIGHTING_METRICS=1
+  - Publishes runtime counters to $SyntaxHighlightingMetrics
+- PWSH_SYNTAX_HIGHLIGHTING_DEBUG=1
+  - Publishes debug trace events to $SyntaxHighlightingDebugTrace
+- PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE=1
+  - Uses reduced-risk keymap and conservative behavior
+- PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH=<n>
+  - Skips highlighting on very long input lines
+- PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH=<n>
+  - Limits expensive command lookup for very long first tokens
+- PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET=<n>
+  - Enables automatic degraded mode once repeated render errors are detected
+
+## Reliability and Performance Checks
+
+Run all local checks and benchmark in one command:
+
+```powershell
+.\scripts\validate-gate.ps1
+```
+
+Run only reliability checks:
+
+```powershell
+.\tests\test-local.ps1 -Cycles 100
+```
+
+Run micro-benchmark only:
+
+```powershell
+.\scripts\benchmark-render.ps1 -Iterations 1000 -WarmupIterations 200
+```
+
+## Troubleshooting
+
+If your shell appears to be in a stale key-handler state, use the reset sequence documented in:
+
+- docs/perf-and-hardening.md
+
+Then import the module again.
+
+## Licensing
+
+Licensed under MIT. See LICENSE.
 
 ## Credits
 
-<table>
-  <tr>
-    <td align="center"><a href="https://www.linkedin.com/in/rajeswarkhan/" target="_blank"><img src="https://media.licdn.com/dms/image/v2/C4D03AQHgpVP7ohT_ZQ/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1516901476072?e=1731542400&v=beta&t=yj5Mo6Hq43u_XXf48CAqelbYeZZJaxpudQFk9vXxmHo" width="100px;" alt=""/><br /><sub><b>Rajeswar Khan</b></sub></a><br /></td>
-  </tr>
-</table>
+- Original project authors: Brian Tannert and Rajeswar Khan
+- Ongoing maintenance and fork hardening: contributors
