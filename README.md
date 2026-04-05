@@ -6,8 +6,17 @@ This repository uses AI-assisted development for code generation, refactoring, d
 
 Interactive syntax highlighting and command validation for PowerShell.
 
+Fork notice: this repository is a fork of <https://github.com/digitalguy99/pwsh-syntax-highlighting>.
+
+## Why This Fork Exists
+
+- Preserve and maintain the project with active fixes and compatibility updates
+- Improve interactive reliability for modern PSReadLine behavior
+- Add hardening, diagnostics, and local validation tooling for safer releases
+- Keep the original project name for continuity and discoverability
+
 This project is inspired by zsh-syntax-highlighting:
-https://github.com/zsh-users/zsh-syntax-highlighting
+<https://github.com/zsh-users/zsh-syntax-highlighting>
 
 ## Status
 
@@ -100,4 +109,5 @@ Licensed under MIT. See LICENSE.
 ## Credits
 
 - Original project authors: Brian Tannert and Rajeswar Khan
-- Ongoing maintenance and fork hardening: contributors
+- Upstream repository: <https://github.com/digitalguy99/pwsh-syntax-highlighting>
+- Fork maintainer: <https://github.com/ruZeph>
