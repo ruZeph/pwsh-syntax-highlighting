@@ -31,6 +31,9 @@ path (AST token extents, caching, telemetry) differs from upstream's line-text r
   text-insert keys (arrows, Home/End, Tab, Space, Backspace/Delete).
 - Version is single-sourced from the module manifest: `scripts/install.ps1` (local version +
   remote version parsing) and the test suites no longer hardcode `1.0.0`.
+- **`Publish` workflow is manual-only and disabled** until the `PSG_API_KEY` repository secret
+  exists; a push trigger made every module commit a red build for a release that was not
+  intended to ship.
 
 ### Fixed
 

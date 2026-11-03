@@ -1,12 +1,23 @@
 name: Publish
 
+# Disabled on purpose: publishing needs the PSG_API_KEY repository secret, and a push
+# trigger turns every commit that touches the module into a red build until that secret
+# exists. This workflow now only runs when someone asks for it.
+#
+# To publish:
+#   1. gh secret set PSG_API_KEY -R ruZeph/pwsh-syntax-highlighting   (scope the gallery
+#      key to "Push new packages and package versions" with pattern pwsh-syntax-highlighting)
+#   2. gh workflow enable publish.yml -R ruZeph/pwsh-syntax-highlighting
+#   3. gh workflow run publish.yml -R ruZeph/pwsh-syntax-highlighting
+#
+# To go back to publishing on every release commit, restore this trigger:
+#   push:
+#     branches: [main]
+#     paths:
+#       - 'src/pwsh-syntax-highlighting.psm1'
+#       - 'pwsh-syntax-highlighting.psd1'
+
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/pwsh-syntax-highlighting.psm1'
-      - 'pwsh-syntax-highlighting.psd1'
   workflow_dispatch:
 
 jobs:

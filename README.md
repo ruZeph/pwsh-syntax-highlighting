@@ -287,7 +287,7 @@ Run micro-benchmark only:
 .
 |- .github/
 |  |- workflows/
-|     |- publish.yml (PSGallery publish on manifest/module change)
+|     |- publish.yml (manual-only PSGallery publish; disabled)
 |     |- test.yml (manifest, analyzer and test suites)
 |- assets/
 |  |- icon.png (module/gallery icon, referenced by psd1 IconUri)
