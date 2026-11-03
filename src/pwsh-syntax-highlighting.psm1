@@ -5,6 +5,13 @@ $script:CommandLookupCache = @{}
 $script:CommandLookupOrder = [System.Collections.Generic.Queue[string]]::new()
 $script:CommandCacheMaxSize = 512
 $script:CommandCacheTtlMs = 5000
+# A name that does not exist is far more expensive to confirm than one that does: Get-Command
+# spends ~27ms scanning PSModulePath for auto-loadable modules, versus ~0.03ms for a hit. Keep
+# negative answers longer, and remember the prefixes of known commands so typing them never
+# triggers that scan (see KnownCommandPrefixes below).
+$script:NegativeCacheTtlMs = if ($env:PWSH_SYNTAX_HIGHLIGHTING_NEGATIVE_TTL_MS) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_NEGATIVE_TTL_MS } else { 30000 }
+$script:KnownCommandPrefixes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$script:KnownCommandPrefixLimit = 20000
 $script:MaxBufferLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH } else { 0 }
 $script:MaxCommandLookupLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH } else { 256 }
 
@@ -41,14 +48,30 @@ $script:Highlighters = @(
                 return $script:Styles.InvalidCommand
             }
 
+            # A single character is never a settled command name; leave the colour alone rather
+            # than spend a command lookup (and a red flash) on every first keystroke.
+            if ($ctx.TokenText.Length -lt 2) {
+                return $null
+            }
+
+            # If a known-good command starts with this text, the user is still typing that
+            # command. Trust it and skip the lookup: confirming a *non*-existent name is ~27ms.
+            if ($script:KnownCommandPrefixes.Contains($ctx.TokenText)) {
+                if ($script:EnableTelemetry) { $script:Perf.PrefixShortCircuit++ }
+                return $script:Styles.ValidCommand
+            }
+
             $nowTicks = [Environment]::TickCount64
             $cacheEntry = $script:CommandLookupCache[$ctx.TokenText]
-            if ($cacheEntry -and (($nowTicks - [int64]$cacheEntry.Tick) -lt $script:CommandCacheTtlMs)) {
-                if ($script:EnableTelemetry) { $script:Perf.CacheHit++ }
-                if ([bool]$cacheEntry.Exists) {
-                    return $script:Styles.ValidCommand
+            if ($cacheEntry) {
+                $ttl = if ([bool]$cacheEntry.Exists) { $script:CommandCacheTtlMs } else { $script:NegativeCacheTtlMs }
+                if (($nowTicks - [int64]$cacheEntry.Tick) -lt $ttl) {
+                    if ($script:EnableTelemetry) { $script:Perf.CacheHit++ }
+                    if ([bool]$cacheEntry.Exists) {
+                        return $script:Styles.ValidCommand
+                    }
+                    return $script:Styles.InvalidCommand
                 }
-                return $script:Styles.InvalidCommand
             }
 
             if ($cacheEntry) {
@@ -70,7 +93,16 @@ $script:Highlighters = @(
                 }
             }
 
-            if ($exists) { return $script:Styles.ValidCommand }
+            if ($exists) {
+                # Remember every prefix of a real command so typing it again stays lookup-free.
+                if ($script:KnownCommandPrefixes.Count -lt $script:KnownCommandPrefixLimit) {
+                    for ($prefixLength = 2; $prefixLength -lt $ctx.TokenText.Length; $prefixLength++) {
+                        [void]$script:KnownCommandPrefixes.Add($ctx.TokenText.Substring(0, $prefixLength))
+                    }
+                }
+                return $script:Styles.ValidCommand
+            }
+
             return $script:Styles.InvalidCommand
         }
     }
@@ -78,6 +110,8 @@ $script:Highlighters = @(
 
 $script:LastRenderSignature = ''
 $script:LastPaintedLength = -1
+$script:VerifiedOriginX = -1
+$script:VerifiedOriginY = -1
 $script:SafeMode = ($env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -eq '1')
 $script:EnableTelemetry = ($env:PWSH_SYNTAX_HIGHLIGHTING_METRICS -eq '1')
 $script:EnableDebugTrace = (-not $script:SafeMode) -and ($env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG -eq '1')
@@ -104,7 +138,9 @@ $script:Perf = [ordered]@{
     RegistrationSkipped = 0
     CacheHit            = 0
     CacheMiss           = 0
+    PrefixShortCircuit  = 0
     PaintOps            = 0
+    PaintVerifyFails    = 0
     PaintChars          = 0
     NoColorWrite        = 0
     TotalRenderMs       = 0.0
@@ -398,6 +434,8 @@ $script:RenderAction = {
         $bufferText = $null; $cursorIgnored = $null
         [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$bufferText, [ref]$cursorIgnored)
         if ([string]::IsNullOrEmpty($bufferText)) {
+            $script:VerifiedOriginX = -1
+            $script:VerifiedOriginY = -1
             & $script:AddDebugTraceEvent 'empty-buffer' $eventKey
             if ($script:EnableTelemetry) {
                 $script:Perf.NoToken++
@@ -426,11 +464,6 @@ $script:RenderAction = {
         # continuation prompt, so a buffer offset no longer maps to a fixed screen column.
         $firstNewline = $bufferText.IndexOf("`n")
         $paintableLimit = if ($firstNewline -ge 0) { $firstNewline } else { [int]::MaxValue }
-
-        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition(0)
-        $bufferOriginX = $host.UI.RawUI.CursorPosition.X
-        $bufferOriginY = $host.UI.RawUI.CursorPosition.Y
-        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
 
         # Every token gets a chance to colour itself; the stock highlighter only claims
         # command-name tokens. This is what makes `foo; bar` and `a | b` validate both sides.
@@ -503,6 +536,100 @@ $script:RenderAction = {
             return
         }
 
+        $bufferWidth = $host.UI.RawUI.BufferSize.Width
+        if ($bufferWidth -le 0) { return }
+
+        # Where does buffer offset 0 sit on screen?
+        #
+        # Console cursor reads are not trustworthy enough to compute this once and believe it:
+        # measured on one unchanged line, SetCursorPosition(0)+read reported 5, 11, 31, 49 and 44
+        # on consecutive frames, and the arithmetic variant drifted the same way. So every
+        # candidate is confirmed by reading the cells it implies and comparing them with the
+        # token's own characters. Candidates are tried cheapest-first and lazily: a cached origin
+        # that still verifies costs one buffer read and no cursor movement at all.
+        $firstTarget = $targets[0]
+        $lineHasNewline = $bufferText.IndexOf("`n") -ge 0
+
+        $probeOrigin = {
+            param($ProbeX, $ProbeY)
+
+            if ($ProbeX -lt 0 -or $ProbeY -lt 0) { return $false }
+            $probeRuns = & $script:GetScreenRuns -Text $bufferText -Offset $firstTarget.StartOffset -Length $firstTarget.Length -StartX $ProbeX -BufferWidth $bufferWidth
+            if ($probeRuns.Count -eq 0 -or $probeRuns[0].Length -le 0) { return $false }
+
+            $probeRun = $probeRuns[0]
+            $probeRow = $ProbeY + $probeRun.Y
+            $probeRec = New-Object System.Management.Automation.Host.Rectangle($probeRun.X, $probeRow, ($probeRun.X + $probeRun.Length - 1), $probeRow)
+            try {
+                $probeBuf = $host.UI.RawUI.GetBufferContents($probeRec)
+            }
+            catch {
+                return $false
+            }
+
+            $probeCount = [Math]::Min($probeRun.Length, $probeBuf.GetLength(1))
+            if ($probeCount -le 0) { return $false }
+
+            for ($i = 0; $i -lt $probeCount; $i++) {
+                $textIndex = $firstTarget.StartOffset + $i
+                if ($textIndex -ge $bufferText.Length) { return $false }
+                if ($probeBuf.GetValue(0, $i).Character -ne $bufferText[$textIndex]) { return $false }
+            }
+
+            return $true
+        }
+        # NB: deliberately not .GetNewClosure() - a closure gets its own session state, where
+        # $script: no longer resolves to this module (that silently breaks $script:GetScreenRuns).
+
+        $chosenOrigin = $null
+
+        # 1) the origin that verified last frame (no cursor movement, one buffer read)
+        if ($script:VerifiedOriginX -ge 0 -and (& $probeOrigin $script:VerifiedOriginX $script:VerifiedOriginY)) {
+            $chosenOrigin = [pscustomobject]@{ X = $script:VerifiedOriginX; Y = $script:VerifiedOriginY; Via = 'verified-cache' }
+        }
+
+        # 2) arithmetic from the live cursor (no cursor movement)
+        if (-not $chosenOrigin -and -not $lineHasNewline) {
+            $cursorOffset = [int]$cursor
+            $liveCursor = $host.UI.RawUI.CursorPosition
+            $arithmeticX = ((($liveCursor.X - $cursorOffset) % $bufferWidth) + $bufferWidth) % $bufferWidth
+            $rowsDown = [int][Math]::Floor((($arithmeticX + $cursorOffset) / $bufferWidth))
+            $arithmeticY = [Math]::Max(0, $liveCursor.Y - $rowsDown)
+            if (& $probeOrigin $arithmeticX $arithmeticY) {
+                $chosenOrigin = [pscustomobject]@{ X = $arithmeticX; Y = $arithmeticY; Via = 'cursor-arithmetic' }
+            }
+        }
+
+        # 3) ask PSReadLine to seek to buffer offset 0 (two cursor movements: last resort)
+        if (-not $chosenOrigin) {
+            [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition(0)
+            $seekX = $host.UI.RawUI.CursorPosition.X
+            $seekY = $host.UI.RawUI.CursorPosition.Y
+            [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
+            if (& $probeOrigin $seekX $seekY) {
+                $chosenOrigin = [pscustomobject]@{ X = $seekX; Y = $seekY; Via = 'cursor-seek' }
+            }
+        }
+
+        if ($null -eq $chosenOrigin) {
+            # Nothing verifies: leave the line uncoloured for a frame rather than paint the wrong
+            # characters or the prompt.
+            $script:Perf.PaintVerifyFails++
+            & $script:AddDebugTraceEvent 'origin-unverified' $eventKey $firstTarget.Text
+            if ($script:EnableTelemetry) {
+                $perfStart.Stop()
+                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
+                & $script:PublishMetrics
+            }
+            return
+        }
+
+        $bufferOriginX = $chosenOrigin.X
+        $bufferOriginY = $chosenOrigin.Y
+        $originMethod = $chosenOrigin.Via
+        $script:VerifiedOriginX = $chosenOrigin.X
+        $script:VerifiedOriginY = $chosenOrigin.Y
+
         $signatureParts = foreach ($target in $targets) {
             "$($target.Text)|$($target.StartOffset)|$($target.Length)|$($target.Color)"
         }
@@ -532,25 +659,53 @@ $script:RenderAction = {
             return
         }
 
-        $bufferWidth = $host.UI.RawUI.BufferSize.Width
+        # Geometry probe: with debug tracing on, record what the renderer thinks the layout is,
+        # so a mis-paint can be traced to the origin/width reading instead of guessed at.
+        if ($script:EnableDebugTrace -and $targets.Count -gt 0) {
+            $probe = $targets[0]
+            $probeRuns = & $script:GetScreenRuns -Text $bufferText -Offset $probe.StartOffset -Length $probe.Length -StartX $bufferOriginX -BufferWidth $bufferWidth
+            $probeRun = if ($probeRuns.Count -gt 0) { $probeRuns[0] } else { [pscustomobject]@{ X = -1; Y = -1; Length = 0 } }
+            $geometry = 'origin={0},{1} via={2} width={3} bufLen={4} cursorOffset={5} target={6}@{7}+{8} run={9},{10}+{11}' -f `
+                $bufferOriginX, $bufferOriginY, $originMethod, $bufferWidth, `
+                $bufferText.Length, [int]$cursor, $probe.Text, $probe.StartOffset, $probe.Length, `
+                $probeRun.X, $probeRun.Y, $probeRun.Length
+            & $script:AddDebugTraceEvent 'frame-geometry' $eventKey $bufferText $geometry
+        }
+
+        $paintedFrames = 0
         foreach ($target in $targets) {
             $runs = & $script:GetScreenRuns -Text $bufferText -Offset $target.StartOffset -Length $target.Length -StartX $bufferOriginX -BufferWidth $bufferWidth
 
+            $runOffset = 0
             foreach ($run in $runs) {
-                # Never paint left of the buffer's own origin on the first row: that area belongs
-                # to the prompt, and recolouring it leaves a mark PSReadLine's diff renderer will
-                # not clean up (observed as a red "> " prompt once the origin read was off by 2).
-                if ($run.Y -eq 0 -and $run.X -lt $bufferOriginX) {
-                    & $script:AddDebugTraceEvent 'prompt-guard-skip' $eventKey $target.Text
-                    continue
-                }
-
                 $rowY = $bufferOriginY + $run.Y
                 $finalRec = New-Object System.Management.Automation.Host.Rectangle($run.X, $rowY, ($run.X + $run.Length - 1), $rowY)
                 $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
 
-                $needsWrite = $false
+                # Verify before colouring: the cells we are about to change must actually hold the
+                # token's characters. Console cursor reads are not reliable enough to trust a
+                # computed origin (measured drift: the same line reported 5, 11, 31, 49), and a
+                # mis-paint is not repaired by PSReadLine's diff renderer. A mismatch means the
+                # geometry is wrong this frame, so skip it rather than corrupt the line.
                 $cellCount = [Math]::Min($run.Length, $finalBuf.GetLength(1))
+                $verified = $true
+                for ($xPosition = 0; $xPosition -lt $cellCount; $xPosition++) {
+                    $textIndex = $target.StartOffset + $runOffset + $xPosition
+                    if ($textIndex -ge $bufferText.Length) { $verified = $false; break }
+                    if ($finalBuf.GetValue(0, $xPosition).Character -ne $bufferText[$textIndex]) {
+                        $verified = $false
+                        break
+                    }
+                }
+
+                if (-not $verified) {
+                    $script:Perf.PaintVerifyFails++
+                    & $script:AddDebugTraceEvent 'paint-verify-fail' $eventKey $target.Text ("origin={0},{1} run={2},{3}+{4}" -f $bufferOriginX, $bufferOriginY, $run.X, $rowY, $run.Length)
+                    $runOffset += $run.Length
+                    continue
+                }
+
+                $needsWrite = $false
                 for ($xPosition = 0; $xPosition -lt $cellCount; $xPosition++) {
                     $bufferItem = $finalBuf.GetValue(0, $xPosition)
                     if ($bufferItem.ForegroundColor -ne $target.Color) {
@@ -564,11 +719,14 @@ $script:RenderAction = {
                 if ($needsWrite) {
                     $coords = New-Object System.Management.Automation.Host.Coordinates $run.X, $rowY
                     $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
+                    $paintedFrames++
                     if ($script:EnableTelemetry) { $script:Perf.PaintOps++ }
                 }
                 elseif ($script:EnableTelemetry) {
                     $script:Perf.NoColorWrite++
                 }
+
+                $runOffset += $run.Length
             }
         }
 

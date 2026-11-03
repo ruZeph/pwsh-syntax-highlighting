@@ -66,7 +66,7 @@ if (-not (Test-Path $moduleManifest)) {
     throw "Could not find module manifest at $moduleManifest"
 }
 
-Write-Host "[1/13] Running lifecycle stress test ($Cycles cycles)..."
+Write-Host "[1/14] Running lifecycle stress test ($Cycles cycles)..."
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $cycleFailures = @()
 for ($i = 1; $i -le $Cycles; $i++) {
@@ -88,7 +88,7 @@ if ($cycleFailures.Count -gt 0) {
 
 Write-Host "  PASS: $Cycles cycles in $([math]::Round($sw.Elapsed.TotalMilliseconds, 2)) ms"
 
-Write-Host "[2/13] Validating custom key bindings after import..."
+Write-Host "[2/14] Validating custom key bindings after import..."
 Import-Module $moduleManifest -Force -ErrorAction Stop
 foreach ($k in $keys) {
     Assert-Equal -Name "Custom key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected 'ValidatePrograms'
@@ -103,13 +103,13 @@ foreach ($pasteKey in @('Ctrl+v', 'Shift+Insert')) {
 }
 Write-Host "  PASS: custom key bindings are active"
 
-Write-Host "[3/13] Validating render action smoke test..."
+Write-Host "[3/14] Validating render action smoke test..."
 $module = Get-Module $moduleName -ErrorAction Stop
 $renderResult = & $module { & $script:RenderAction; 'render-ok' }
 Assert-Equal -Name 'RenderAction invocation' -Actual $renderResult -Expected 'render-ok'
 Write-Host "  PASS: render action executes"
 
-Write-Host "[4/13] Validating immediate-key throttle bypass edge case..."
+Write-Host "[4/14] Validating immediate-key throttle bypass edge case..."
 $throttleCheck = & $module {
     $script:EnableTelemetry = $true
     $script:Perf.Throttled = 0
@@ -122,7 +122,7 @@ $throttleCheck = & $module {
 Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck) -Expected '0'
 Write-Host "  PASS: immediate-key throttle bypass works"
 
-Write-Host "[5/13] Validating debug trace and cache behavior under simulated key flow..."
+Write-Host "[5/14] Validating debug trace and cache behavior under simulated key flow..."
 $debugCheck = & $module {
     $script:EnableTelemetry = $true
     $script:EnableDebugTrace = $true
@@ -151,7 +151,7 @@ Assert-True -Name 'Debug simulation should produce trace events' -Condition ($de
 Assert-Equal -Name 'Space in simulated flow should not throttle' -Actual ([string]$debugCheck.SpaceThrottled) -Expected '0'
 Write-Host "  PASS: debug trace behavior validated"
 
-Write-Host "[6/13] Validating command cache miss/hit behavior directly..."
+Write-Host "[6/14] Validating command cache miss/hit behavior directly..."
 $cacheCheck = & $module {
     $script:EnableTelemetry = $true
     $script:Perf.CacheHit = 0
@@ -173,7 +173,7 @@ Assert-True -Name 'Direct cache check should produce hit(s)' -Condition ($cacheC
 Assert-True -Name 'Direct cache check should produce miss(es)' -Condition ($cacheCheck.CacheMiss -ge 1)
 Write-Host "  PASS: debug trace and cache behavior validated"
 
-Write-Host "[7/13] Validating failure injection resilience..."
+Write-Host "[7/14] Validating failure injection resilience..."
 $injectionCheck = & $module {
     $original = $script:AddDebugTraceEvent
     $script:AddDebugTraceEvent = { throw 'debug-trace-failure' }
@@ -192,7 +192,7 @@ $injectionCheck = & $module {
 Assert-Equal -Name 'Render path should survive injected debug failure' -Actual $injectionCheck -Expected 'ok'
 Write-Host "  PASS: failure injection resilience validated"
 
-Write-Host "[8/13] Validating safe-mode reduced keymap..."
+Write-Host "[8/14] Validating safe-mode reduced keymap..."
 Remove-Module $moduleName -ErrorAction SilentlyContinue
 $env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE = '1'
 Import-Module $moduleManifest -Force -ErrorAction Stop
@@ -203,7 +203,7 @@ Remove-Item Env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -ErrorAction SilentlyContinue
 Import-Module $moduleManifest -Force -ErrorAction Stop
 Write-Host "  PASS: safe-mode reduced keymap validated"
 
-Write-Host "[9/13] Validating upstream-parity token gating (keywords, variables, comments)..."
+Write-Host "[9/14] Validating upstream-parity token gating (keywords, variables, comments)..."
 $gateCases = @(
     @{ Line = 'Get-ChildItem'; Expect = $true }
     @{ Line = 'git status'; Expect = $true }
@@ -240,7 +240,7 @@ if ($gateFailures.Count -gt 0) {
 }
 Write-Host "  PASS: keywords, variables, comments and operators are not validated"
 
-Write-Host "[10/13] Validating throttle command (Set-SyntaxHighlightingThrottle)..."
+Write-Host "[10/14] Validating throttle command (Set-SyntaxHighlightingThrottle)..."
 Assert-Equal -Name 'Throttle default value' -Actual ([string](Set-SyntaxHighlightingThrottle -Get)) -Expected '50'
 Assert-Equal -Name 'Throttle set value' -Actual ([string](Set-SyntaxHighlightingThrottle 120).ThrottleMs) -Expected '120'
 Assert-Equal -Name 'Throttle persists after set' -Actual ([string](Set-SyntaxHighlightingThrottle -Get)) -Expected '120'
@@ -248,7 +248,7 @@ Assert-Equal -Name 'Throttle reset value' -Actual ([string](Set-SyntaxHighlighti
 Assert-Equal -Name 'Throttle alias' -Actual ([string](Get-Alias -Name 'syntax-highlighting').Definition) -Expected 'Set-SyntaxHighlightingThrottle'
 Write-Host "  PASS: throttle command and alias validated"
 
-Write-Host "[11/13] Validating multi-token validation (pipelines, semicolons, wrapping)..."
+Write-Host "[11/14] Validating multi-token validation (pipelines, semicolons, wrapping)..."
 $multiToken = & $module {
     $lines = @(
         'Get-ChildItem; nosuchcmd',
@@ -288,7 +288,7 @@ Assert-Equal -Name 'Token offset is added to the buffer origin' -Actual $multiTo
 Assert-Equal -Name 'Token after a newline starts in the first column' -Actual $multiToken.NewlineRun -Expected '0,1,3'
 Write-Host "  PASS: multi-token selection and screen-offset mapping validated"
 
-Write-Host "[12/13] Validating degraded-mode gate and render-error diagnostics..."
+Write-Host "[12/14] Validating degraded-mode gate and render-error diagnostics..."
 $gate = & $module {
     $savedRetryMs = $script:DegradedRetryMs
     $savedDegraded = $script:DegradedMode
@@ -332,7 +332,50 @@ Assert-True -Name 'Metrics expose LastRenderError' -Condition $gate.MetricsHaveE
 Assert-True -Name 'Metrics expose DegradedRetryMs' -Condition $gate.MetricsHaveRetry
 Write-Host "  PASS: degradation is time-limited and errors stay diagnosable"
 
-Write-Host "[13/13] Validating key binding restore after remove..."
+Write-Host "[13/14] Validating lookup cost guards (prefix short-circuit, negative cache)..."
+$lookup = & $module {
+    $script:EnableTelemetry = $true
+    $script:Perf.PrefixShortCircuit = 0
+    $paint = $script:Highlighters[0].Paint
+    $mk = { param($t) [pscustomobject]@{ TokenText = $t } }
+
+    $script:CommandLookupCache.Clear()
+    $script:KnownCommandPrefixes.Clear()
+
+    $singleChar = & $paint (& $mk 'G')
+    $singleCharIsNull = ($null -eq $singleChar)
+
+    $fullName = (& $paint (& $mk 'Get-ChildItem')) -eq $script:Styles.ValidCommand
+    $prefixesKnownAfterHit = $script:KnownCommandPrefixes.Contains('Get-Ch')
+    $shortCircuit = (& $paint (& $mk 'Get-Ch')) -eq $script:Styles.ValidCommand
+    $shortCircuits = [int]$script:Perf.PrefixShortCircuit
+
+    $script:CommandLookupCache.Clear()
+    $missFirst = (& $paint (& $mk 'nosuchcmd-xyz')) -eq $script:Styles.InvalidCommand
+    $missSecond = (& $paint (& $mk 'nosuchcmd-xyz')) -eq $script:Styles.InvalidCommand
+    $negativeCached = ($script:CommandLookupCache['nosuchcmd-xyz'].Exists -eq $false)
+
+    $script:EnableTelemetry = $false
+
+    [pscustomobject]@{
+        SingleCharIsNull = $singleCharIsNull
+        PrefixesKnown    = $prefixesKnownAfterHit
+        ShortCircuitGreen = $shortCircuit
+        ShortCircuitCount = $shortCircuits
+        MissIsInvalid     = $missFirst -and $missSecond
+        NegativeCached    = $negativeCached
+    }
+}
+
+Assert-True -Name 'Single character is left uncoloured (no lookup)' -Condition $lookup.SingleCharIsNull
+Assert-True -Name 'Validating a command registers its prefixes' -Condition $lookup.PrefixesKnown
+Assert-True -Name 'Typing a known command prefix short-circuits to valid' -Condition $lookup.ShortCircuitGreen
+Assert-True -Name 'Short-circuit is actually used' -Condition ($lookup.ShortCircuitCount -gt 0)
+Assert-True -Name 'Unknown command resolves invalid' -Condition $lookup.MissIsInvalid
+Assert-True -Name 'Unknown command result is cached as a negative' -Condition $lookup.NegativeCached
+Write-Host "  PASS: expensive negative lookups are avoided and cached"
+
+Write-Host "[14/14] Validating key binding restore after remove..."
 Remove-Module $moduleName -ErrorAction Stop
 foreach ($k in $expectedDefault.Keys) {
     Assert-Equal -Name "Default key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected $expectedDefault[$k]

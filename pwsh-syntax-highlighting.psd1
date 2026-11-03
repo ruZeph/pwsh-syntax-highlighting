@@ -12,7 +12,7 @@
     RootModule        = '.\src\pwsh-syntax-highlighting.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '1.2.1'
+    ModuleVersion     = '1.2.2'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -109,6 +109,11 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+1.2.2 - Measured lookup and paint costs
+- Known-command prefixes short-circuit Get-Command (~27ms -> ~0.04ms)
+- Negative lookups cached 30s; single characters are not looked up
+- Origin verified against the cells before painting (no mis-paint)
+
 1.2.1 - Paste-aware throttle
 - A multi-character buffer change (paste, undo) bypasses the render throttle
 - Paint can no longer touch the prompt area

@@ -2,6 +2,41 @@
 
 All notable changes to pwsh-syntax-highlighting are documented in this file.
 
+## [1.2.2] - 2026-05-06
+
+### Measured performance
+
+Profiled the hot path instead of guessing. A keystroke costs 0.03 ms of parsing and 0.03-0.12 ms of
+colour decision, but ~27 ms when the typed name does **not** exist (`Get-Command` scans
+`PSModulePath` for auto-loadable modules; a hit costs ~0.03 ms). That single asymmetry dominated
+typing of any new or misspelled command.
+
+### Added
+
+- **Prefix short-circuit**: validating a command registers its prefixes, so typing a command that
+  has been validated before never calls `Get-Command` (~27 ms to ~0.04 ms).
+- **Negative cache TTL** (`PWSH_SYNTAX_HIGHLIGHTING_NEGATIVE_TTL_MS`, default 30000) - a name that
+  does not exist is far more expensive to confirm than one that does.
+- **Single characters are not looked up**; they are left uncoloured instead of flashing red on the
+  first keystroke of every word.
+- `scripts/benchmark-render.ps1` rewritten: per-component benchmarks with p50/p95/p99/max,
+  `-Json` output for revision comparison, and no longer reports zeros in a headless host.
+
+### Fixed
+
+- **Paint is now self-verifying.** Console cursor reads proved unreliable (the same unchanged line
+  reported origin X as 5, 11, 31, 49 and 44 on consecutive frames), so a computed origin could map
+  a token onto the wrong cells. Before colouring, the cells are read and compared with the token's
+  own characters; a mismatch skips the frame instead of corrupting the line. Candidate origins are
+  probed cheapest-first (verified cache, then cursor arithmetic, then a cursor seek) and the probe
+  is not a `GetNewClosure()` block, because a closure gets its own session state where `$script:`
+  no longer resolves to this module.
+
+### Corrected
+
+- v1.2.1 claimed paint could mark the prompt (a red `> `). Re-tested without the module loaded: the
+  same red `> ` appears 22 times, so it comes from PSReadLine/the console host, not this module.
+
 ## [1.2.1] - 2026-05-06
 
 ### Fixed

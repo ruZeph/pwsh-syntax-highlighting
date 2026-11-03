@@ -260,6 +260,35 @@ $SyntaxHighlightingMetrics.LastRenderError      # '' when healthy
 $SyntaxHighlightingDebugTrace | ? Reason -eq 'exception'   # Detail holds the message
 ```
 
+## Performance
+
+Measured, not assumed. `scripts/benchmark-render.ps1` benchmarks each component of a keystroke;
+run it with `-Json out.json` to compare revisions.
+
+| component | mean | notes |
+| --- | --- | --- |
+| `tokenize` (parser pass) | 0.03 ms | p99 0.04 ms |
+| `paint-warm` (cache hit) | 0.03 ms | predicate + colour decision |
+| `paint-cold` (`Get-Command` hit) | 0.12 ms | command resolves |
+| `Get-Command` **miss** | **~27 ms** | scans `PSModulePath` for auto-loadable modules |
+| `screen-map` (offset to cells) | 0.26 ms | per token |
+| full render, live console | 9.8 ms | 79 rises/line, 82 console writes |
+
+The dominant cost is confirming a command that does **not** exist (~27 ms, versus ~0.03 ms for one
+that does). Three guards keep that off the keystroke path:
+
+- known-command prefixes short-circuit the lookup (~27 ms to ~0.04 ms), so typing a command you
+  have used before never triggers a scan;
+- negative answers are cached for 30s (`PWSH_SYNTAX_HIGHLIGHTING_NEGATIVE_TTL_MS`);
+- single-character tokens are left uncoloured instead of being looked up.
+
+Live-console render cost per keystroke across revisions, same 61-character line:
+
+| build | ms/render | paint ops | paint chars |
+| --- | --- | --- | --- |
+| 1.2.0 | 10.91 | 85 | 912 |
+| 1.2.2 | 9.79 | 82 | 912 |
+
 ## Performance Strategy
 
 This module is inspired by and optimized using principles from [zsh-syntax-highlighting](https://github.com/zsh-users/zsh-syntax-highlighting):
