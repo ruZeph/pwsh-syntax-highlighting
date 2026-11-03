@@ -77,6 +77,7 @@ $script:Highlighters = @(
 )
 
 $script:LastRenderSignature = ''
+$script:LastPaintedLength = -1
 $script:SafeMode = ($env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -eq '1')
 $script:EnableTelemetry = ($env:PWSH_SYNTAX_HIGHLIGHTING_METRICS -eq '1')
 $script:EnableDebugTrace = (-not $script:SafeMode) -and ($env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG -eq '1')
@@ -349,6 +350,26 @@ $script:RenderAction = {
             $minRenderIntervalMs = 0
         }
 
+        # A paste (or undo, or history recall) arrives as one multi-character change; it must
+        # not be swallowed by the throttle, or the pasted line stays uncoloured until the next
+        # keystroke. Read the buffer text first (no parse) and bypass the throttle when the
+        # length moved by more than a single character.
+        $earlyBufferText = $null; $earlyCursor = $null
+        try {
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$earlyBufferText, [ref]$earlyCursor)
+        }
+        catch {
+            $earlyBufferText = $null
+        }
+
+        if ($null -ne $earlyBufferText -and $script:LastPaintedLength -ge 0) {
+            $lengthDelta = [Math]::Abs($earlyBufferText.Length - $script:LastPaintedLength)
+            if ($lengthDelta -gt 1) {
+                $minRenderIntervalMs = 0
+                & $script:AddDebugTraceEvent 'bulk-change-bypass' $eventKey $earlyBufferText
+            }
+        }
+
         $nowTick = [Environment]::TickCount64
         $elapsedMs = ($nowTick - $script:LastRenderTick)
         if ($elapsedMs -lt $minRenderIntervalMs) {
@@ -516,6 +537,14 @@ $script:RenderAction = {
             $runs = & $script:GetScreenRuns -Text $bufferText -Offset $target.StartOffset -Length $target.Length -StartX $bufferOriginX -BufferWidth $bufferWidth
 
             foreach ($run in $runs) {
+                # Never paint left of the buffer's own origin on the first row: that area belongs
+                # to the prompt, and recolouring it leaves a mark PSReadLine's diff renderer will
+                # not clean up (observed as a red "> " prompt once the origin read was off by 2).
+                if ($run.Y -eq 0 -and $run.X -lt $bufferOriginX) {
+                    & $script:AddDebugTraceEvent 'prompt-guard-skip' $eventKey $target.Text
+                    continue
+                }
+
                 $rowY = $bufferOriginY + $run.Y
                 $finalRec = New-Object System.Management.Automation.Host.Rectangle($run.X, $rowY, ($run.X + $run.Length - 1), $rowY)
                 $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
@@ -545,6 +574,7 @@ $script:RenderAction = {
 
         $script:LastRenderSignature = $signature
         $script:LastRenderTick = $nowTick
+        $script:LastPaintedLength = $bufferText.Length
         $global:lastRender = Get-Date
         & $script:AddDebugTraceEvent 'painted' $eventKey ([string]$targets[0].Text)
 

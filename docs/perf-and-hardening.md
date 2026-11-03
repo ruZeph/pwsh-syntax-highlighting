@@ -64,6 +64,8 @@ Typical `Reason` values:
 - `degraded-mode-retry` (error budget elapsed, render path retried)
 - `error-budget-tripped` (Detail carries the last render error)
 - `continuation-line-skip` (token after a newline, not painted)
+- `bulk-change-bypass` (paste/undo: throttle bypassed)
+- `prompt-guard-skip` (run would have painted over the prompt)
 - `no-token`
 - `whitespace-token`
 - `host-missing`

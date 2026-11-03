@@ -12,7 +12,7 @@
     RootModule        = '.\src\pwsh-syntax-highlighting.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '1.2.0'
+    ModuleVersion     = '1.2.1'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -109,6 +109,10 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+1.2.1 - Paste-aware throttle
+- A multi-character buffer change (paste, undo) bypasses the render throttle
+- Paint can no longer touch the prompt area
+
 1.2.0 - Whole-line validation
 - Validate every command token on the line, not just the first: `foo; bar`, `a | b`
 - Screen-offset mapping handles wrapped lines; continuation lines are skipped

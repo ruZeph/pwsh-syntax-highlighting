@@ -197,14 +197,23 @@ The installer includes several safety checks:
 - Reserved keywords, variables, comments and operators are intentionally left uncoloured
   (matching upstream), so `if`, `foreach`, `$x` and `#todo` never flash red.
 
-### Right-Click Paste in Windows Terminal
+### Paste behaviour
 
-Right-click paste is a built-in Windows Terminal feature that bypasses PowerShell's PSReadLine key handler system. This means:
+Pasted text does **not** arrive as one event. PSReadLine 2.4 has no bracketed-paste support (no
+`ESC[200~` / `ESC[201~` handling in its sources, and `Set-PSReadLineKeyHandler` refuses raw escape
+sequences), so every terminal delivers a paste as ordinary key events — right-click paste
+included. What differs is only how many events and whether the module is on the path:
 
-- **Keyboard paste** (`Ctrl+V`, `Shift+Insert`) will trigger syntax highlighting immediately
-- **Right-click paste** will insert text without immediate syntax highlighting; highlighting appears after the next render cycle (when you press a key or after ~30ms)
-
-This is by design—no workaround exists for intercepting Windows Terminal's native right-click paste through PSReadLine APIs reliably.
+- **Keyboard paste** (`Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert`) is bound by this module, so the
+  whole clipboard payload is inserted in one step and painted immediately. Measured: pasting
+  `Get-ChildItem; nosuchcmd` colours both commands at once, with no further keystroke
+  (`Get-ChildItem` green, `nosuchcmd` red).
+- **Terminal-driven paste** (right-click in Windows Terminal or conhost) is turned into individual
+  key events by the terminal. The last of those events usually lands inside the render throttle,
+  so the line can stay one step stale and gets coloured on your next keystroke. Cosmetic only:
+  the command itself is unaffected.
+- If you paste a lot, set the throttle to 0 so every keystroke repaints:
+  `syntax-highlighting 0`.
 
 ## Usage
 

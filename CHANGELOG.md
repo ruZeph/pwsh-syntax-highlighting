@@ -2,6 +2,27 @@
 
 All notable changes to pwsh-syntax-highlighting are documented in this file.
 
+## [1.2.1] - 2026-05-06
+
+### Fixed
+
+- **Paste left the line uncoloured.** The render throttle swallowed the last keystroke of a
+  pasted payload, so colours appeared only after the next keypress. A buffer change larger than a
+  single character (paste, undo, `Paste`) now bypasses the throttle and paints immediately.
+  Verified by pasting `Get-ChildItem; nosuchcmd` with `Ctrl+V`: both commands coloured with no
+  further keystroke.
+- **Paint could mark the prompt.** A run whose computed X fell left of the buffer origin recoloured
+  prompt cells, and PSReadLine's diff renderer never repairs cells it thinks are unchanged, so the
+  mark persisted (seen as a red `> `). Such runs are now skipped (`prompt-guard-skip`).
+
+### Changed
+
+- README paste section rewritten from measurement instead of assumption: PSReadLine 2.4 has no
+  bracketed-paste support and rejects raw escape-sequence key bindings, so paste always arrives as
+  key events; only the throttle distinguishes keyboard paste (bound by this module, painted at
+  once) from terminal-driven paste (coloured on the next keystroke). `syntax-highlighting 0`
+  repaints on every keystroke for paste-heavy use.
+
 ## [1.2.0] - 2026-05-06
 
 ### Added
