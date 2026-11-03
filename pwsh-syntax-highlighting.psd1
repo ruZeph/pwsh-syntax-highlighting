@@ -12,7 +12,7 @@
     RootModule        = '.\src\pwsh-syntax-highlighting.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '1.1.0'
+    ModuleVersion     = '1.2.0'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -109,6 +109,10 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+1.2.0 - Whole-line validation
+- Validate every command token on the line, not just the first: `foo; bar`, `a | b`
+- Screen-offset mapping handles wrapped lines; continuation lines are skipped
+
 1.1.0 - Upstream parity merge (digitalguy99/pwsh-syntax-highlighting 3.3.1)
 - Add Set-SyntaxHighlightingThrottle + syntax-highlighting alias (tunable render throttle)
 - Skip reserved keywords, variables, comments and operators via TokenFlags instead of a word list

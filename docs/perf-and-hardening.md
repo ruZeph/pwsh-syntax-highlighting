@@ -61,6 +61,9 @@ This document describes operational controls and diagnostics for the module.
 Typical `Reason` values:
 
 - `throttled`
+- `degraded-mode-retry` (error budget elapsed, render path retried)
+- `error-budget-tripped` (Detail carries the last render error)
+- `continuation-line-skip` (token after a newline, not painted)
 - `no-token`
 - `whitespace-token`
 - `host-missing`

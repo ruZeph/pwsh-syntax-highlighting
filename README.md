@@ -100,6 +100,7 @@ This fork of pwsh-syntax-highlighting includes several enhancements over the ori
 
 ### Core Improvements
 
+- **Whole-line validation**: every command token on the line is validated, not just the first
 - **Command validation caching**: LRU cache (512 entries, 5s TTL) for expensive `Get-Command` lookups
 - **Adaptive throttling**: Tunable render throttle (default 50ms, upstream-compatible) with zero-delay paths for fast keys (arrows, tab, etc.); change it at runtime with `syntax-highlighting 100`
 - **Safe mode**: Optional reduced-risk keymap via `PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE=1`
@@ -187,8 +188,12 @@ The installer includes several safety checks:
 
 ### Validation scope
 
-- Only the **first** command token on the line is validated. Commands after a semicolon
-  (`foo; bar`) and tokens on continuation lines are not validated.
+- Every command token on the first input line is validated, including commands after a
+  semicolon and either side of a pipeline: `foo; bar`, `a | b`,
+  `Get-ChildItem -Path . | Where-Object { $_ } ; foo.exe`.
+- Tokens on **continuation lines** (after pressing Enter inside a block or a quote) are
+  skipped. PSReadLine indents those rows with a continuation prompt, so a buffer offset no
+  longer maps to a fixed screen column and colouring would land on the wrong cells.
 - Reserved keywords, variables, comments and operators are intentionally left uncoloured
   (matching upstream), so `if`, `foreach`, `$x` and `#todo` never flash red.
 
@@ -235,6 +240,16 @@ The equivalent environment variable is `PWSH_SYNTAX_HIGHLIGHTING_THROTTLE_MS` (r
   - Render throttle in milliseconds (default: 50); same knob as `Set-SyntaxHighlightingThrottle`
 - `PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET=<n>`
   - Enables automatic degraded mode once repeated render errors are detected (default: 5)
+- `PWSH_SYNTAX_HIGHLIGHTING_DEGRADED_RETRY_MS=<ms>`
+  - How long degraded mode waits before retrying the render path (default: 60000; 0 retries on
+    the next keystroke, use 0 only for debugging)
+
+When a render fails, the message is now kept instead of swallowed:
+
+```powershell
+$SyntaxHighlightingMetrics.LastRenderError      # '' when healthy
+$SyntaxHighlightingDebugTrace | ? Reason -eq 'exception'   # Detail holds the message
+```
 
 ## Performance Strategy
 

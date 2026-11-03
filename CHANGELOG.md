@@ -2,6 +2,46 @@
 
 All notable changes to pwsh-syntax-highlighting are documented in this file.
 
+## [1.2.0] - 2026-05-06
+
+### Added
+
+- **Whole-line validation.** Every command token on the line is validated instead of only the
+  first, so `foo; bar`, `a | b` and `Get-ChildItem | Where-Object { $_ } ; foo.exe` colour each
+  command correctly. Token selection is driven by the same `CommandName` token flag, so
+  keywords, variables and comments stay uncoloured.
+- **`Get-ScreenRunForToken`** maps a buffer offset/length onto terminal cells and returns
+  per-row runs, so painting is correct when a command wraps or follows other text. Replaces the
+  previous "token starts at cursor origin + offset" assumption.
+
+### Fixed
+
+- **Degraded mode was permanent.** Once the render error budget tripped, highlighting stayed off
+  for the rest of the session with no way back, so one transient failure (a resize, a paste burst,
+  a console API hiccup) silently disabled the module. It now retries after
+  `PWSH_SYNTAX_HIGHLIGHTING_DEGRADED_RETRY_MS` (default 60s) and clears itself on success.
+- **Render failures were undiagnosable.** The catch block discarded the exception, so a broken
+  render path looked like "colouring just stopped working". The message is now stored in
+  `$SyntaxHighlightingMetrics.LastRenderError`, added to debug trace events as `Detail`, and an
+  `error-budget-tripped` event records the trip.
+
+### Changed
+
+- Render path paints each target token through the new mapping, batching one
+  `GetBufferContents`/`SetBufferContents` pair per row run and skipping rows whose colour is
+  already correct.
+- Render signature now covers every visible token (text, offset, length, colour), so edits
+  anywhere on the line trigger a repaint instead of only edits to the first token.
+- Screen-offset mapping and the degraded-mode gate live in module scriptblocks, not functions:
+  the render action is built with `GetNewClosure()`, and a closure resolves scriptblock
+  variables but not module functions.
+
+### Remaining limitation
+
+- Tokens on continuation lines (after Enter inside a block) are skipped, because PSReadLine may
+  prefix those rows with a continuation prompt; a buffer offset no longer maps to a fixed screen
+  column. Documented in the README.
+
 ## [1.1.0] - 2026-05-06
 
 ### Upstream parity merge (digitalguy99/pwsh-syntax-highlighting 3.3.1)

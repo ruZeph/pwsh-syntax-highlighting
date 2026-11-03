@@ -66,7 +66,7 @@ if (-not (Test-Path $moduleManifest)) {
     throw "Could not find module manifest at $moduleManifest"
 }
 
-Write-Host "[1/11] Running lifecycle stress test ($Cycles cycles)..."
+Write-Host "[1/13] Running lifecycle stress test ($Cycles cycles)..."
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $cycleFailures = @()
 for ($i = 1; $i -le $Cycles; $i++) {
@@ -88,7 +88,7 @@ if ($cycleFailures.Count -gt 0) {
 
 Write-Host "  PASS: $Cycles cycles in $([math]::Round($sw.Elapsed.TotalMilliseconds, 2)) ms"
 
-Write-Host "[2/11] Validating custom key bindings after import..."
+Write-Host "[2/13] Validating custom key bindings after import..."
 Import-Module $moduleManifest -Force -ErrorAction Stop
 foreach ($k in $keys) {
     Assert-Equal -Name "Custom key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected 'ValidatePrograms'
@@ -103,13 +103,13 @@ foreach ($pasteKey in @('Ctrl+v', 'Shift+Insert')) {
 }
 Write-Host "  PASS: custom key bindings are active"
 
-Write-Host "[3/11] Validating render action smoke test..."
+Write-Host "[3/13] Validating render action smoke test..."
 $module = Get-Module $moduleName -ErrorAction Stop
 $renderResult = & $module { & $script:RenderAction; 'render-ok' }
 Assert-Equal -Name 'RenderAction invocation' -Actual $renderResult -Expected 'render-ok'
 Write-Host "  PASS: render action executes"
 
-Write-Host "[4/11] Validating immediate-key throttle bypass edge case..."
+Write-Host "[4/13] Validating immediate-key throttle bypass edge case..."
 $throttleCheck = & $module {
     $script:EnableTelemetry = $true
     $script:Perf.Throttled = 0
@@ -122,7 +122,7 @@ $throttleCheck = & $module {
 Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck) -Expected '0'
 Write-Host "  PASS: immediate-key throttle bypass works"
 
-Write-Host "[5/11] Validating debug trace and cache behavior under simulated key flow..."
+Write-Host "[5/13] Validating debug trace and cache behavior under simulated key flow..."
 $debugCheck = & $module {
     $script:EnableTelemetry = $true
     $script:EnableDebugTrace = $true
@@ -151,7 +151,7 @@ Assert-True -Name 'Debug simulation should produce trace events' -Condition ($de
 Assert-Equal -Name 'Space in simulated flow should not throttle' -Actual ([string]$debugCheck.SpaceThrottled) -Expected '0'
 Write-Host "  PASS: debug trace behavior validated"
 
-Write-Host "[6/11] Validating command cache miss/hit behavior directly..."
+Write-Host "[6/13] Validating command cache miss/hit behavior directly..."
 $cacheCheck = & $module {
     $script:EnableTelemetry = $true
     $script:Perf.CacheHit = 0
@@ -173,7 +173,7 @@ Assert-True -Name 'Direct cache check should produce hit(s)' -Condition ($cacheC
 Assert-True -Name 'Direct cache check should produce miss(es)' -Condition ($cacheCheck.CacheMiss -ge 1)
 Write-Host "  PASS: debug trace and cache behavior validated"
 
-Write-Host "[7/11] Validating failure injection resilience..."
+Write-Host "[7/13] Validating failure injection resilience..."
 $injectionCheck = & $module {
     $original = $script:AddDebugTraceEvent
     $script:AddDebugTraceEvent = { throw 'debug-trace-failure' }
@@ -192,7 +192,7 @@ $injectionCheck = & $module {
 Assert-Equal -Name 'Render path should survive injected debug failure' -Actual $injectionCheck -Expected 'ok'
 Write-Host "  PASS: failure injection resilience validated"
 
-Write-Host "[8/11] Validating safe-mode reduced keymap..."
+Write-Host "[8/13] Validating safe-mode reduced keymap..."
 Remove-Module $moduleName -ErrorAction SilentlyContinue
 $env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE = '1'
 Import-Module $moduleManifest -Force -ErrorAction Stop
@@ -203,7 +203,7 @@ Remove-Item Env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -ErrorAction SilentlyContinue
 Import-Module $moduleManifest -Force -ErrorAction Stop
 Write-Host "  PASS: safe-mode reduced keymap validated"
 
-Write-Host "[9/11] Validating upstream-parity token gating (keywords, variables, comments)..."
+Write-Host "[9/13] Validating upstream-parity token gating (keywords, variables, comments)..."
 $gateCases = @(
     @{ Line = 'Get-ChildItem'; Expect = $true }
     @{ Line = 'git status'; Expect = $true }
@@ -240,7 +240,7 @@ if ($gateFailures.Count -gt 0) {
 }
 Write-Host "  PASS: keywords, variables, comments and operators are not validated"
 
-Write-Host "[10/11] Validating throttle command (Set-SyntaxHighlightingThrottle)..."
+Write-Host "[10/13] Validating throttle command (Set-SyntaxHighlightingThrottle)..."
 Assert-Equal -Name 'Throttle default value' -Actual ([string](Set-SyntaxHighlightingThrottle -Get)) -Expected '50'
 Assert-Equal -Name 'Throttle set value' -Actual ([string](Set-SyntaxHighlightingThrottle 120).ThrottleMs) -Expected '120'
 Assert-Equal -Name 'Throttle persists after set' -Actual ([string](Set-SyntaxHighlightingThrottle -Get)) -Expected '120'
@@ -248,7 +248,91 @@ Assert-Equal -Name 'Throttle reset value' -Actual ([string](Set-SyntaxHighlighti
 Assert-Equal -Name 'Throttle alias' -Actual ([string](Get-Alias -Name 'syntax-highlighting').Definition) -Expected 'Set-SyntaxHighlightingThrottle'
 Write-Host "  PASS: throttle command and alias validated"
 
-Write-Host "[11/11] Validating key binding restore after remove..."
+Write-Host "[11/13] Validating multi-token validation (pipelines, semicolons, wrapping)..."
+$multiToken = & $module {
+    $lines = @(
+        'Get-ChildItem; nosuchcmd',
+        'Get-ChildItem | Select-Object',
+        'nosuchcmd | Select-Object',
+        'Get-ChildItem -Path . | Where-Object { $_ } ; foo.exe'
+    )
+
+    $claims = foreach ($line in $lines) {
+        $tokens = $null; $errors = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseInput($line, [ref]$tokens, [ref]$errors)
+        $claimed = foreach ($token in $tokens) {
+            $ctx = [pscustomobject]@{ Token = $token; TokenText = [string]$token.Text }
+            if (& $script:Highlighters[0].Predicate $ctx) { [string]$token.Text }
+        }
+        [pscustomobject]@{ Line = $line; Claimed = @($claimed) }
+    }
+
+    $wrapped = Get-ScreenRunForToken -Text ('#' + ('x' * 14)) -Offset 1 -Length 14 -StartX 0 -BufferWidth 10
+    $offset = Get-ScreenRunForToken -Text 'abcGet-Date' -Offset 3 -Length 8 -StartX 6 -BufferWidth 120
+    $afterNewline = Get-ScreenRunForToken -Text "aaa`nbbb" -Offset 4 -Length 3 -StartX 6 -BufferWidth 120
+
+    [pscustomobject]@{
+        Claims        = $claims
+        WrappedRuns   = @($wrapped | ForEach-Object { "$($_.X),$($_.Y),$($_.Length)" })
+        OffsetRun     = "$($offset[0].X),$($offset[0].Y),$($offset[0].Length)"
+        NewlineRun    = "$($afterNewline[0].X),$($afterNewline[0].Y),$($afterNewline[0].Length)"
+    }
+}
+
+Assert-Equal -Name 'Semicolon line claims both commands' -Actual ($multiToken.Claims[0].Claimed -join ',') -Expected 'Get-ChildItem,nosuchcmd'
+Assert-Equal -Name 'Pipeline line claims both commands' -Actual ($multiToken.Claims[1].Claimed -join ',') -Expected 'Get-ChildItem,Select-Object'
+Assert-Equal -Name 'Pipeline line claims invalid first command' -Actual ($multiToken.Claims[2].Claimed -join ',') -Expected 'nosuchcmd,Select-Object'
+Assert-Equal -Name 'Mixed line claims three command tokens' -Actual ($multiToken.Claims[3].Claimed -join ',') -Expected 'Get-ChildItem,Where-Object,foo.exe'
+Assert-Equal -Name 'Wrapped token splits into per-row runs' -Actual ($multiToken.WrappedRuns -join ' ') -Expected '1,0,9 0,1,5'
+Assert-Equal -Name 'Token offset is added to the buffer origin' -Actual $multiToken.OffsetRun -Expected '9,0,8'
+Assert-Equal -Name 'Token after a newline starts in the first column' -Actual $multiToken.NewlineRun -Expected '0,1,3'
+Write-Host "  PASS: multi-token selection and screen-offset mapping validated"
+
+Write-Host "[12/13] Validating degraded-mode gate and render-error diagnostics..."
+$gate = & $module {
+    $savedRetryMs = $script:DegradedRetryMs
+    $savedDegraded = $script:DegradedMode
+    $savedSince = $script:DegradedSince
+    $savedErrors = $script:Perf.RenderErrors
+
+    $script:DegradedRetryMs = 60000
+    $script:DegradedMode = $true
+    $script:DegradedSince = [Environment]::TickCount64
+
+    $blockedWhileCooling = -not (& $script:EnterRenderGate 'T')
+
+    # Pretend the retry window has elapsed
+    $script:DegradedSince = [Environment]::TickCount64 - 61000
+    $allowedAfterWindow = [bool](& $script:EnterRenderGate 'T')
+    $stateCleared = -not $script:DegradedMode
+    $errorsReset = ($script:Perf.RenderErrors -eq 0)
+
+    $script:DegradedRetryMs = $savedRetryMs
+    $script:DegradedMode = $savedDegraded
+    $script:DegradedSince = $savedSince
+    $script:Perf.RenderErrors = $savedErrors
+
+    [pscustomobject]@{
+        BlockedWhileCooling = $blockedWhileCooling
+        AllowedAfterWindow  = $allowedAfterWindow
+        StateCleared        = $stateCleared
+        ErrorsReset         = $errorsReset
+        MetricsHaveError    = ($null -ne $global:SyntaxHighlightingMetrics -and
+                               $null -ne $global:SyntaxHighlightingMetrics.PSObject.Properties['LastRenderError'])
+        MetricsHaveRetry    = ($null -ne $global:SyntaxHighlightingMetrics -and
+                               $null -ne $global:SyntaxHighlightingMetrics.PSObject.Properties['DegradedRetryMs'])
+    }
+}
+
+Assert-True -Name 'Degraded mode blocks renders inside the retry window' -Condition $gate.BlockedWhileCooling
+Assert-True -Name 'Degraded mode retries after the window elapses' -Condition $gate.AllowedAfterWindow
+Assert-True -Name 'Retry clears degraded mode' -Condition $gate.StateCleared
+Assert-True -Name 'Retry resets the render error count' -Condition $gate.ErrorsReset
+Assert-True -Name 'Metrics expose LastRenderError' -Condition $gate.MetricsHaveError
+Assert-True -Name 'Metrics expose DegradedRetryMs' -Condition $gate.MetricsHaveRetry
+Write-Host "  PASS: degradation is time-limited and errors stay diagnosable"
+
+Write-Host "[13/13] Validating key binding restore after remove..."
 Remove-Module $moduleName -ErrorAction Stop
 foreach ($k in $expectedDefault.Keys) {
     Assert-Equal -Name "Default key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected $expectedDefault[$k]

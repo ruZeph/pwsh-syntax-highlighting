@@ -82,6 +82,9 @@ $script:EnableTelemetry = ($env:PWSH_SYNTAX_HIGHLIGHTING_METRICS -eq '1')
 $script:EnableDebugTrace = (-not $script:SafeMode) -and ($env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG -eq '1')
 $script:RenderErrorBudget = if ($env:PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET } else { 5 }
 $script:DegradedMode = $false
+$script:LastRenderError = ''
+$script:DegradedSince = [int64]0
+$script:DegradedRetryMs = if ($env:PWSH_SYNTAX_HIGHLIGHTING_DEGRADED_RETRY_MS) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_DEGRADED_RETRY_MS } else { 60000 }
 $script:DebugTrace = New-Object System.Collections.Generic.List[object]
 $script:Preflight = [ordered]@{
     Passed                   = $false
@@ -113,7 +116,9 @@ $script:AddDebugTraceEvent = {
 
         $Key = $null,
 
-        [string]$TokenText = ''
+        [string]$TokenText = '',
+
+        [string]$Detail = ''
     )
 
     try {
@@ -130,6 +135,7 @@ $script:AddDebugTraceEvent = {
                 Reason    = $Reason
                 Key       = if ($null -eq $Key) { 'NoName' } else { [string]$Key }
                 TokenText = $TokenText
+                Detail    = $Detail
             })
 
         # Keep debug plumbing best-effort; never let tracing break key handlers.
@@ -149,7 +155,9 @@ $script:PublishMetrics = {
     $m.DegradedMode = $script:DegradedMode
     $m.ThrottleLimit = $script:ThrottleLimit
     $m.RenderErrorBudget = $script:RenderErrorBudget
+    $m.DegradedRetryMs = $script:DegradedRetryMs
     $m.PreflightPassed = $script:Preflight.Passed
+    $m.LastRenderError = $script:LastRenderError
     $global:SyntaxHighlightingMetrics = [pscustomobject]$m
 }.GetNewClosure()
 
@@ -195,6 +203,115 @@ function Invoke-SyntaxHighlightingPreflight {
     $script:Preflight.Passed = $script:Preflight.HostSupportsRawUI -and $script:Preflight.PSReadLineLoaded -and $script:Preflight.KeyHandlerCommandPresent -and ($missing.Count -eq 0)
 }
 
+# Screen-offset mapping lives in a scriptblock, not a function: the render action is built
+# with GetNewClosure(), and a closure resolves scriptblock variables but not module functions.
+$script:EnterRenderGate = {
+    param($Key)
+
+    if (-not $script:DegradedMode) { return $true }
+
+    $degradedForMs = [Environment]::TickCount64 - $script:DegradedSince
+    if ($script:DegradedRetryMs -gt 0 -and $degradedForMs -ge $script:DegradedRetryMs) {
+        # Give the render path another chance instead of staying silent for the session.
+        $script:DegradedMode = $false
+        $script:Perf.RenderErrors = 0
+        $script:EnableDebugTrace = (-not $script:SafeMode) -and ($env:PWSH_SYNTAX_HIGHLIGHTING_DEBUG -eq '1')
+        & $script:AddDebugTraceEvent 'degraded-mode-retry' $Key
+        return $true
+    }
+
+    & $script:AddDebugTraceEvent 'degraded-mode-skip' $Key
+    return $false
+}
+
+$script:GetScreenRuns = {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][ValidateRange(0, [int]::MaxValue)][int]$Offset,
+        [Parameter(Mandatory = $true)][ValidateRange(0, [int]::MaxValue)][int]$Length,
+        [Parameter(Mandatory = $true)][int]$StartX,
+        [Parameter(Mandatory = $true)][int]$BufferWidth
+    )
+
+    $runs = New-Object System.Collections.Generic.List[object]
+    if ($Length -le 0 -or $BufferWidth -le 0) { return @() }
+
+    $x = $StartX
+    $y = 0
+
+    # Advance to the token's first character.
+    $limit = [Math]::Min($Offset, $Text.Length)
+    for ($i = 0; $i -lt $limit; $i++) {
+        if ($Text[$i] -eq "`n") {
+            $y++
+            $x = 0
+            continue
+        }
+        $x++
+        if ($x -ge $BufferWidth) {
+            $x = 0
+            $y++
+        }
+    }
+
+    # Then collect the characters, breaking a run whenever the row changes.
+    $runX = $x
+    $runY = $y
+    $runLength = 0
+    for ($i = $Offset; $i -lt ($Offset + $Length); $i++) {
+        if ($i -ge $Text.Length) { break }
+
+        if ($runLength -eq 0) {
+            $runX = $x
+            $runY = $y
+        }
+        $runLength++
+
+        if ($Text[$i] -eq "`n") {
+            $runs.Add([pscustomobject]@{ X = $runX; Y = $runY; Length = $runLength })
+            $runLength = 0
+            $x = 0
+            $y++
+            continue
+        }
+
+        $x++
+        if ($x -ge $BufferWidth) {
+            $runs.Add([pscustomobject]@{ X = $runX; Y = $runY; Length = $runLength })
+            $runLength = 0
+            $x = 0
+            $y++
+        }
+    }
+
+    if ($runLength -gt 0) {
+        $runs.Add([pscustomobject]@{ X = $runX; Y = $runY; Length = $runLength })
+    }
+
+    return $runs.ToArray()
+}
+
+function Get-ScreenRunForToken {
+    <#
+    .SYNOPSIS
+        Maps a buffer offset/length onto terminal cells, split into per-row runs.
+    .DESCRIPTION
+        Public entry point for the logic the renderer uses (see $script:GetScreenRuns).
+        The buffer is a flat string but the terminal is a rectangle: character N is not
+        simply X = origin + N once the line wraps or contains a newline.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][ValidateRange(0, 2147483647)][int]$Offset,
+        [Parameter(Mandatory = $true)][ValidateRange(0, 2147483647)][int]$Length,
+        [Parameter(Mandatory = $true)][int]$StartX,
+        [Parameter(Mandatory = $true)][int]$BufferWidth
+    )
+
+    & $script:GetScreenRuns -Text $Text -Offset $Offset -Length $Length -StartX $StartX -BufferWidth $BufferWidth
+}
+
 $script:RenderAction = {
     param($KeyInfo)
 
@@ -212,10 +329,7 @@ $script:RenderAction = {
     $eventKey = if ($normalizedKeyInfo) { $normalizedKeyInfo.Key } else { [System.ConsoleKey]::NoName }
 
     try {
-        if ($script:DegradedMode) {
-            & $script:AddDebugTraceEvent 'degraded-mode-skip' $eventKey
-            return
-        }
+        if (-not (& $script:EnterRenderGate $eventKey)) { return }
 
         # High-latency keys respect the tunable throttle; interactive/navigation keys
         # bypass it so the prompt never feels sticky (upstream: "custom throttle setting").
@@ -260,11 +374,12 @@ $script:RenderAction = {
             return
         }
 
-        $token = $tokens[0]
-        $tokenText = [string]$token.Text
-        if ([string]::IsNullOrWhiteSpace($tokenText)) {
-            & $script:AddDebugTraceEvent 'whitespace-token' $eventKey
+        $bufferText = $null; $cursorIgnored = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$bufferText, [ref]$cursorIgnored)
+        if ([string]::IsNullOrEmpty($bufferText)) {
+            & $script:AddDebugTraceEvent 'empty-buffer' $eventKey
             if ($script:EnableTelemetry) {
+                $script:Perf.NoToken++
                 $perfStart.Stop()
                 $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
             }
@@ -272,29 +387,13 @@ $script:RenderAction = {
         }
 
         if (-not $host -or -not $host.UI -or -not $host.UI.RawUI) {
-            & $script:AddDebugTraceEvent 'host-missing' $eventKey $tokenText
-            return
-        }
-
-        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition(0)
-        $cursorPosX = $host.UI.RawUI.CursorPosition.X
-        $cursorPosY = $host.UI.RawUI.CursorPosition.Y
-        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
-
-        $tokenStartOffset = ($token.Extent.StartOffset)
-        $tokenLength = ($token.Extent.EndOffset - $tokenStartOffset)
-        if ($tokenLength -le 0) {
-            & $script:AddDebugTraceEvent 'invalid-token-length' $eventKey $tokenText
-            if ($script:EnableTelemetry) {
-                $perfStart.Stop()
-                $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
-            }
+            & $script:AddDebugTraceEvent 'host-missing' $eventKey
             return
         }
 
         $bufferLength = if ($ast -and $ast.Extent) { $ast.Extent.EndOffset } else { -1 }
         if ($script:MaxBufferLength -gt 0 -and $bufferLength -gt $script:MaxBufferLength) {
-            & $script:AddDebugTraceEvent 'max-buffer-length' $eventKey $tokenText
+            & $script:AddDebugTraceEvent 'max-buffer-length' $eventKey
             if ($script:EnableTelemetry) {
                 $perfStart.Stop()
                 $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
@@ -302,45 +401,80 @@ $script:RenderAction = {
             return
         }
 
-        $ctx = [pscustomobject]@{
-            Token            = $token
-            TokenText        = $tokenText
-            TokenStartOffset = $tokenStartOffset
-            TokenLength      = $tokenLength
-            BufferLength     = $bufferLength
-            CursorX          = $cursorPosX
-            CursorY          = $cursorPosY
-            Ast              = $ast
-            Tokens           = $tokens
-            Errors           = $errors
-        }
+        # Tokens on continuation lines are skipped: PSReadLine may prefix those rows with a
+        # continuation prompt, so a buffer offset no longer maps to a fixed screen column.
+        $firstNewline = $bufferText.IndexOf("`n")
+        $paintableLimit = if ($firstNewline -ge 0) { $firstNewline } else { [int]::MaxValue }
 
-        $color = $null
-        foreach ($highlighter in $script:Highlighters) {
-            $useThis = $false
-            try {
-                $useThis = [bool](& $highlighter.Predicate $ctx)
-            }
-            catch {
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition(0)
+        $bufferOriginX = $host.UI.RawUI.CursorPosition.X
+        $bufferOriginY = $host.UI.RawUI.CursorPosition.Y
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor)
+
+        # Every token gets a chance to colour itself; the stock highlighter only claims
+        # command-name tokens. This is what makes `foo; bar` and `a | b` validate both sides.
+        $targets = New-Object System.Collections.Generic.List[object]
+        foreach ($candidate in $tokens) {
+            $candidateText = [string]$candidate.Text
+            if ([string]::IsNullOrWhiteSpace($candidateText)) { continue }
+
+            $candidateStart = [int]$candidate.Extent.StartOffset
+            $candidateLength = [int]($candidate.Extent.EndOffset - $candidateStart)
+            if ($candidateLength -le 0) { continue }
+            if ($candidateStart -ge $paintableLimit) {
+                & $script:AddDebugTraceEvent 'continuation-line-skip' $eventKey $candidateText
                 continue
             }
 
-            if (-not $useThis) { continue }
+            $ctx = [pscustomobject]@{
+                Token            = $candidate
+                TokenText        = $candidateText
+                TokenStartOffset = $candidateStart
+                TokenLength      = $candidateLength
+                BufferLength     = $bufferLength
+                CursorX          = $bufferOriginX
+                CursorY          = $bufferOriginY
+                Ast              = $ast
+                Tokens           = $tokens
+                Errors           = $errors
+            }
 
-            try {
-                $color = & $highlighter.Paint $ctx
-            }
-            catch {
-                $color = $null
+            $color = $null
+            foreach ($highlighter in $script:Highlighters) {
+                $useThis = $false
+                try {
+                    $useThis = [bool](& $highlighter.Predicate $ctx)
+                }
+                catch {
+                    continue
+                }
+
+                if (-not $useThis) { continue }
+
+                try {
+                    $color = & $highlighter.Paint $ctx
+                }
+                catch {
+                    $color = $null
+                }
+
+                if ($null -ne $color) {
+                    break
+                }
             }
 
-            if ($null -ne $color) {
-                break
-            }
+            if ($null -eq $color) { continue }
+
+            $targets.Add([pscustomobject]@{
+                    Text        = $candidateText
+                    StartOffset = $candidateStart
+                    Length      = $candidateLength
+                    Color       = $color
+                })
         }
 
-        if ($null -eq $color) {
-            & $script:AddDebugTraceEvent 'no-color' $eventKey $tokenText
+        if ($targets.Count -eq 0) {
+            & $script:AddDebugTraceEvent 'no-color' $eventKey
             if ($script:EnableTelemetry) {
                 $perfStart.Stop()
                 $script:Perf.TotalRenderMs += $perfStart.Elapsed.TotalMilliseconds
@@ -348,8 +482,11 @@ $script:RenderAction = {
             return
         }
 
-        $bufferHash = if ($ast -and $ast.Extent -and $ast.Extent.Text) { $ast.Extent.Text.GetHashCode() } else { 0 }
-        $signature = "$tokenText|$tokenStartOffset|$tokenLength|$cursorPosX|$cursorPosY|$bufferLength|$bufferHash|$color"
+        $signatureParts = foreach ($target in $targets) {
+            "$($target.Text)|$($target.StartOffset)|$($target.Length)|$($target.Color)"
+        }
+        $signature = (@($signatureParts) -join ';') + "|$bufferOriginX|$bufferOriginY|$bufferLength|$($bufferText.GetHashCode())"
+
         $forceRepaint = $false
         if ($normalizedKeyInfo.Key -in @(
                 [System.ConsoleKey]::Spacebar,
@@ -365,7 +502,7 @@ $script:RenderAction = {
         }
 
         if (-not $forceRepaint -and $signature -eq $script:LastRenderSignature) {
-            & $script:AddDebugTraceEvent 'skipped-unchanged' $eventKey $tokenText
+            & $script:AddDebugTraceEvent 'skipped-unchanged' $eventKey
             if ($script:EnableTelemetry) {
                 $script:Perf.SkippedUnchanged++
                 $perfStart.Stop()
@@ -374,55 +511,42 @@ $script:RenderAction = {
             return
         }
 
-        $sX = ($cursorPosX + $tokenStartOffset)
-        $Y = $cursorPosY
-        $eX = ($sX + $tokenLength)
-        $nextLine = $false
+        $bufferWidth = $host.UI.RawUI.BufferSize.Width
+        foreach ($target in $targets) {
+            $runs = & $script:GetScreenRuns -Text $bufferText -Offset $target.StartOffset -Length $target.Length -StartX $bufferOriginX -BufferWidth $bufferWidth
 
-        $painted = 0
-        $bufSize = $host.UI.RawUI.BufferSize.Width
-        while ($painted -ne $tokenLength) {
-            $scanXEnd = $eX
-            if ($eX -gt $bufSize) {
-                $scanXEnd = $bufSize
-                $eX = $eX - $bufSize
-                $nextLine = $true
-            }
+            foreach ($run in $runs) {
+                $rowY = $bufferOriginY + $run.Y
+                $finalRec = New-Object System.Management.Automation.Host.Rectangle($run.X, $rowY, ($run.X + $run.Length - 1), $rowY)
+                $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
 
-            $finalRec = New-Object System.Management.Automation.Host.Rectangle($sX, $Y, ($scanXEnd - 1), $Y)
-            $finalBuf = $host.UI.RawUI.GetBufferContents($finalRec)
-            $needsWrite = $false
-            for ($xPosition = 0; $xPosition -lt ($scanXEnd - $sX); $xPosition++) {
-                $bufferItem = $finalBuf.GetValue(0, $xPosition)
-                if ($bufferItem.ForegroundColor -ne $color) {
-                    $bufferItem.ForegroundColor = $color
-                    $finalBuf.SetValue($bufferItem, 0, $xPosition)
-                    $needsWrite = $true
-                    if ($script:EnableTelemetry) { $script:Perf.PaintChars++ }
+                $needsWrite = $false
+                $cellCount = [Math]::Min($run.Length, $finalBuf.GetLength(1))
+                for ($xPosition = 0; $xPosition -lt $cellCount; $xPosition++) {
+                    $bufferItem = $finalBuf.GetValue(0, $xPosition)
+                    if ($bufferItem.ForegroundColor -ne $target.Color) {
+                        $bufferItem.ForegroundColor = $target.Color
+                        $finalBuf.SetValue($bufferItem, 0, $xPosition)
+                        $needsWrite = $true
+                        if ($script:EnableTelemetry) { $script:Perf.PaintChars++ }
+                    }
                 }
-                $painted++
-            }
 
-            if ($needsWrite) {
-                $coords = New-Object System.Management.Automation.Host.Coordinates $sX, $Y
-                $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
-                if ($script:EnableTelemetry) { $script:Perf.PaintOps++ }
-            }
-            elseif ($script:EnableTelemetry) {
-                $script:Perf.NoColorWrite++
-            }
-
-            if ($nextLine) {
-                $sX = 0
-                $Y++
-                $nextLine = $false
+                if ($needsWrite) {
+                    $coords = New-Object System.Management.Automation.Host.Coordinates $run.X, $rowY
+                    $host.UI.RawUI.SetBufferContents($coords, $finalBuf)
+                    if ($script:EnableTelemetry) { $script:Perf.PaintOps++ }
+                }
+                elseif ($script:EnableTelemetry) {
+                    $script:Perf.NoColorWrite++
+                }
             }
         }
 
         $script:LastRenderSignature = $signature
         $script:LastRenderTick = $nowTick
         $global:lastRender = Get-Date
-        & $script:AddDebugTraceEvent 'painted' $eventKey $tokenText
+        & $script:AddDebugTraceEvent 'painted' $eventKey ([string]$targets[0].Text)
 
         if ($script:EnableTelemetry) {
             $perfStart.Stop()
@@ -431,12 +555,16 @@ $script:RenderAction = {
         }
     }
     catch {
-        & $script:AddDebugTraceEvent 'exception' $eventKey
+        # Keep the message: a silent degradation is undiagnosable for users.
+        $script:LastRenderError = $_.Exception.Message
+        & $script:AddDebugTraceEvent 'exception' $eventKey $script:LastRenderError $_.Exception.Message
         $script:Perf.RenderErrors++
         if ($script:Perf.RenderErrors -ge $script:RenderErrorBudget) {
             $script:DegradedMode = $true
+            $script:DegradedSince = [Environment]::TickCount64
             $script:EnableDebugTrace = $false
             $script:Perf.ErrorBudgetTrips++
+            & $script:AddDebugTraceEvent 'error-budget-tripped' $eventKey $script:LastRenderError $script:LastRenderError
         }
         & $script:PublishMetrics
         return
