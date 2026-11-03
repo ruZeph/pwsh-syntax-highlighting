@@ -1,0 +1,13 @@
+# Test / benchmark artefacts
+*.log
+*.trx
+benchmark-results*
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# PowerShell artefacts
+*.nupkg

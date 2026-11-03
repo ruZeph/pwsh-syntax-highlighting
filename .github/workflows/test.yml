@@ -1,0 +1,31 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest
+        shell: pwsh
+        run: Test-ModuleManifest ./pwsh-syntax-highlighting.psd1 | Out-Null
+
+      - name: PSScriptAnalyzer (errors fail the build)
+        shell: pwsh
+        run: |
+          $findings = Invoke-ScriptAnalyzer -Path ./src/pwsh-syntax-highlighting.psm1 -Severity Error
+          $findings += Invoke-ScriptAnalyzer -Path ./scripts -Severity Error
+          if ($findings) {
+            $findings | Format-Table RuleName, ScriptName, Line, Message -Wrap | Out-String | Write-Host
+            throw "$($findings.Count) analyzer error(s) found."
+          }
+
+      - name: Full test suite
+        shell: pwsh
+        run: ./tests/test-all.ps1 -StressCycles 3
