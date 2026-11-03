@@ -104,7 +104,8 @@
             ProjectUri = 'https://github.com/ruZeph/pwsh-syntax-highlighting'
 
             # A URL to an icon representing this module.
-            IconUri    = 'https://evgeniypeshkov.gallerycdn.vsassets.io/extensions/evgeniypeshkov/syntax-highlighter/0.5.0/1603295122989/Microsoft.VisualStudio.Services.Icons.Default'
+            # Served from this repo so it cannot disappear with a third-party CDN.
+            IconUri    = 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/assets/icon.png'
 
             # ReleaseNotes of this module
             ReleaseNotes = @'

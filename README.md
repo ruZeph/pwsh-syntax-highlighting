@@ -1,10 +1,11 @@
 # pwsh-syntax-highlighting
 
+<img src="assets/icon.png" width="88" align="right" alt="pwsh-syntax-highlighting icon">
+
 [![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.0-blue)](#installation)
+[![PSGallery](https://img.shields.io/powershellgallery/v/pwsh-syntax-highlighting?label=PSGallery)](https://www.powershellgallery.com/packages/pwsh-syntax-highlighting)
 [![Fork](https://img.shields.io/badge/Fork-digitalguy99%2Fpwsh--syntax--highlighting-181717?logo=github)](https://github.com/digitalguy99/pwsh-syntax-highlighting)
-[![PSGallery](https://img.shields.io/badge/PSGallery-Not%20Published-lightgrey)](#installation)
 
 Interactive syntax highlighting and command validation for PowerShell.
 
@@ -287,10 +288,14 @@ Run micro-benchmark only:
 |- .github/
 |  |- workflows/
 |     |- publish.yml (PSGallery publish on manifest/module change)
+|     |- test.yml (manifest, analyzer and test suites)
+|- assets/
+|  |- icon.png (module/gallery icon, referenced by psd1 IconUri)
 |- docs/
 |  |- perf-and-hardening.md
 |- scripts/
   |- install.ps1 (main installer with safety checks)
+  |- build-icon.ps1 (regenerates assets/icon.png)
   |- example-custom-theme.ps1
   |- manual-test-setup-env.ps1
   |- validate-gate.ps1

@@ -34,6 +34,16 @@ path (AST token extents, caching, telemetry) differs from upstream's line-text r
 
 ### Fixed
 
+- **Publish workflow could not see the gallery key.** The secret was interpolated inline, so an
+  unset secret collapsed into `Publish-Module -NuGetApiKey` with no argument and the run failed
+  with "Missing an argument for parameter 'NuGetApiKey'". The key is now passed through
+  `env: PSG_API_KEY` and validated first, failing with an annotated error that names the missing
+  repository secret. Added a guard that skips publishing when PSGallery already has that version
+  (so non-version-bump pushes to `src/` do not turn the build red).
+- **Gallery icon pointed at someone else's CDN.** `IconUri` referenced the `evgeniypeshkov`
+  VS Code extension icon on `gallerycdn.vsassets.io`. It now points at `assets/icon.png` in this
+  repository, and the README shows the same icon. The hardcoded `Version` badge was replaced with
+  a live PSGallery version badge so it cannot drift from the manifest.
 - Importing the module in a host without PSReadLine (non-interactive `pwsh`, CI) no longer
   throws `Unable to find type [Microsoft.PowerShell.PSConsoleReadLine]`; preflight now
   reports the failure cleanly and leaves the session untouched.

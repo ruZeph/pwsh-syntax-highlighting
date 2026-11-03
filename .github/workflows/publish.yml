@@ -23,10 +23,36 @@ jobs:
           Copy-Item 'pwsh-syntax-highlighting.psd1' $staging
           Copy-Item 'src/pwsh-syntax-highlighting.psm1' (Join-Path $staging 'src')
           Copy-Item 'README.md', 'LICENSE' $staging
-          Test-ModuleManifest (Join-Path $staging 'pwsh-syntax-highlighting.psd1') | Out-Null
+          $manifest = Test-ModuleManifest (Join-Path $staging 'pwsh-syntax-highlighting.psd1')
+          "STAGED_VERSION=$($manifest.Version)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Publish module
+      - name: Check gallery for existing version
+        id: gallery
         shell: pwsh
         run: |
+          $existing = Find-Module -Name pwsh-syntax-highlighting -Repository PSGallery -ErrorAction SilentlyContinue
+          if ($existing -and ([version]$existing.Version -ge [version]$env:STAGED_VERSION)) {
+            Write-Host "::notice::PSGallery already has $($existing.Version); $env:STAGED_VERSION needs a manifest bump to publish."
+            "SKIP_PUBLISH=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+          else {
+            "SKIP_PUBLISH=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      - name: Publish module
+        if: env.SKIP_PUBLISH != 'true'
+        shell: pwsh
+        env:
+          PSG_API_KEY: ${{ secrets.PSG_API_KEY }}
+        run: |
+          # The key must arrive via env, not inline: an unset secret expands to
+          # nothing and PowerShell then reports "Missing an argument for
+          # parameter 'NuGetApiKey'" instead of naming the real problem.
+          if ([string]::IsNullOrWhiteSpace($env:PSG_API_KEY)) {
+            Write-Host "::error title=Missing secret::Repository secret PSG_API_KEY is not set. Add it under Settings > Secrets and variables > Actions, then re-run this workflow."
+            exit 1
+          }
+
           $staging = Join-Path $env:RUNNER_TEMP 'pwsh-syntax-highlighting'
-          Publish-Module -Path $staging -Repository PSGallery -NuGetApiKey ${{ secrets.PSG_API_KEY }}
+          Publish-Module -Path $staging -Repository PSGallery -NuGetApiKey $env:PSG_API_KEY
+          Write-Host "::notice::Published pwsh-syntax-highlighting $env:STAGED_VERSION to PSGallery."
