@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Scenario-based integration tests for pwsh-syntax-highlighting v1.0.0
+    Scenario-based integration tests for pwsh-syntax-highlighting
 .DESCRIPTION
     Rigorous testing scenarios covering installation, updates, runtime flags,
     and safety features. Each scenario simulates realistic user workflows.
@@ -24,6 +24,9 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $moduleManifest = Join-Path $repoRoot 'pwsh-syntax-highlighting.psd1'
 $moduleName = 'pwsh-syntax-highlighting'
 $testModuleRoot = Join-Path $env:TEMP "pwsh-syntax-highlighting-test-$([DateTime]::UtcNow.Ticks)"
+
+# Version is single-sourced from the module manifest (no hardcoded literal to drift).
+$expectedVersion = if ((Get-Content -LiteralPath $moduleManifest -Raw) -match "ModuleVersion\s*=\s*'([0-9.]+)'") { $Matches[1] } else { 'unknown' }
 $testResults = [PSCustomObject]@{
     Passed   = 0
     Failed   = 0
@@ -114,12 +117,12 @@ try {
     Import-Module $moduleManifest -Force -ErrorAction Stop
     $sw.Stop()
     
-    if (Assert-ModuleVersion '1.0.0') {
-        Write-TestPass "Import module v1.0.0" $sw.ElapsedMilliseconds
+    if (Assert-ModuleVersion $expectedVersion) {
+        Write-TestPass "Import module v$expectedVersion" $sw.ElapsedMilliseconds
         $testResults.Total++
     }
     else {
-        Write-TestFail "Import module v1.0.0" "Version mismatch"
+        Write-TestFail "Import module v$expectedVersion" "Version mismatch"
         $testResults.Total++
     }
 }
@@ -342,7 +345,7 @@ Cleanup-TestEnvironment
 
 Write-Host "`n" -NoNewline
 Write-Host "═════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "TEST RESULTS SUMMARY (v1.0.0 Scenario Tests)" -ForegroundColor Cyan
+Write-Host "TEST RESULTS SUMMARY (v$expectedVersion Scenario Tests)" -ForegroundColor Cyan
 Write-Host "═════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
 
 Write-Host "  Total Tests:  $($testResults.Total)" -ForegroundColor White

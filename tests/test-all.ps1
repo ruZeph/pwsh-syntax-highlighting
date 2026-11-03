@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Master test orchestrator for pwsh-syntax-highlighting v1.0.0
+    Master test orchestrator for pwsh-syntax-highlighting
 .DESCRIPTION
     Runs all test suites (local reliability, scenario-based, installer safety)
     and provides comprehensive results summary.
@@ -19,10 +19,11 @@ $ErrorActionPreference = 'Stop'
 
 $testsDir = $PSScriptRoot
 $repoRoot = Split-Path -Parent $testsDir
+$moduleMetadataVersion = if ((Get-Content -LiteralPath (Join-Path $repoRoot 'pwsh-syntax-highlighting.psd1') -Raw) -match "ModuleVersion\s*=\s*'([0-9.]+)'") { $Matches[1] } else { 'unknown' }
 
 Write-Host "`n" -NoNewline
 Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║  pwsh-syntax-highlighting v1.0.0 - Master Test Suite          ║" -ForegroundColor Cyan
+Write-Host "║  pwsh-syntax-highlighting v$moduleMetadataVersion - Master Test Suite          ║" -ForegroundColor Cyan
 Write-Host "║  Automated Scenario & Integration Testing                     ║" -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""

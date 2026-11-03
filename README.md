@@ -2,7 +2,7 @@
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-blue)](#installation)
+[![Version](https://img.shields.io/badge/Version-1.1.0-blue)](#installation)
 [![Fork](https://img.shields.io/badge/Fork-digitalguy99%2Fpwsh--syntax--highlighting-181717?logo=github)](https://github.com/digitalguy99/pwsh-syntax-highlighting)
 [![PSGallery](https://img.shields.io/badge/PSGallery-Not%20Published-lightgrey)](#installation)
 
@@ -72,9 +72,26 @@ irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scri
 # - Update recommendation when an upgrade is available
 ```
 
-**Current version**: 1.0.0
+**Current version**: 1.1.0
 
 To see what's new, check the [repository changelog](https://github.com/ruZeph/pwsh-syntax-highlighting/releases).
+
+## Upstream Parity
+
+This fork tracks <https://github.com/digitalguy99/pwsh-syntax-highlighting>. The upstream
+`3.3.1` line added six fixes after this fork branched; all of them are now present here.
+
+| Upstream change | Status in this fork |
+| --- | --- |
+| Custom throttle setting (`syntax-highlighting <ms>`) | Ported as `Set-SyntaxHighlightingThrottle` + `syntax-highlighting` alias (default 50ms) |
+| Skip reserved keywords (`if`, `foreach`, `function`, `exit`, ...) | Ported, generalised: only tokens flagged `CommandName` by the PowerShell tokenizer are validated |
+| Skip `#`, `$`, `(`, `)` | Covered by the same `CommandName` check |
+| Leading spaces must not break validation | Covered: token offsets come from the AST, not from line-text regex |
+| `CTRL+A` / line-navigation overwrite fix | Covered: navigation keys are re-bound to their PSReadLine functions before rendering |
+| Publish workflow | Restored for the `src/` layout (`.github/workflows/publish.yml`) |
+
+Because validation is now driven by `TokenFlags`, the fork no longer needs upstream's
+hand-maintained keyword list, and new PowerShell keywords are skipped automatically.
 
 ## Features in This Fork
 
@@ -83,7 +100,7 @@ This fork of pwsh-syntax-highlighting includes several enhancements over the ori
 ### Core Improvements
 
 - **Command validation caching**: LRU cache (512 entries, 5s TTL) for expensive `Get-Command` lookups
-- **Adaptive throttling**: Render throttling (30ms minimum interval) with zero-delay paths for fast keys (arrows, tab, etc.)
+- **Adaptive throttling**: Tunable render throttle (default 50ms, upstream-compatible) with zero-delay paths for fast keys (arrows, tab, etc.); change it at runtime with `syntax-highlighting 100`
 - **Safe mode**: Optional reduced-risk keymap via `PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE=1`
 - **Error resilience**: Automatic degradation to safe mode after repeated render failures
 - **Telemetry & diagnostics**: Optional metrics (`$SyntaxHighlightingMetrics`) and debug tracing (`$SyntaxHighlightingDebugTrace`)
@@ -167,6 +184,13 @@ The installer includes several safety checks:
 
 ## Known Limitations
 
+### Validation scope
+
+- Only the **first** command token on the line is validated. Commands after a semicolon
+  (`foo; bar`) and tokens on continuation lines are not validated.
+- Reserved keywords, variables, comments and operators are intentionally left uncoloured
+  (matching upstream), so `if`, `foreach`, `$x` and `#todo` never flash red.
+
 ### Right-Click Paste in Windows Terminal
 
 Right-click paste is a built-in Windows Terminal feature that bypasses PowerShell's PSReadLine key handler system. This means:
@@ -180,6 +204,20 @@ This is by design—no workaround exists for intercepting Windows Terminal's nat
 
 Type commands directly in the prompt. The first command token is highlighted as valid or invalid while you edit.
 
+### Tuning the throttle
+
+If validation feels laggy (slow terminal, SSH, remote session), raise the throttle. If you
+want snappier feedback, lower it. Keys that must feel instant (arrows, `Home`/`End`, `Tab`,
+`Space`, `Backspace`/`Delete`) always bypass the throttle.
+
+```powershell
+syntax-highlighting 100      # set throttle to 100ms
+syntax-highlighting -Get     # show current value
+syntax-highlighting -Reset   # back to the 50ms default
+```
+
+The equivalent environment variable is `PWSH_SYNTAX_HIGHLIGHTING_THROTTLE_MS` (read at import).
+
 ## Runtime Flags
 
 - `PWSH_SYNTAX_HIGHLIGHTING_METRICS=1`
@@ -192,6 +230,8 @@ Type commands directly in the prompt. The first command token is highlighted as 
   - Skips highlighting on very long input lines
 - `PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH=<n>`
   - Limits expensive command lookup for very long first tokens
+- `PWSH_SYNTAX_HIGHLIGHTING_THROTTLE_MS=<ms>`
+  - Render throttle in milliseconds (default: 50); same knob as `Set-SyntaxHighlightingThrottle`
 - `PWSH_SYNTAX_HIGHLIGHTING_RENDER_ERROR_BUDGET=<n>`
   - Enables automatic degraded mode once repeated render errors are detected (default: 5)
 
@@ -244,6 +284,9 @@ Run micro-benchmark only:
 
 ```text
 .
+|- .github/
+|  |- workflows/
+|     |- publish.yml (PSGallery publish on manifest/module change)
 |- docs/
 |  |- perf-and-hardening.md
 |- scripts/
@@ -255,7 +298,10 @@ Run micro-benchmark only:
 |- src/
 |  |- pwsh-syntax-highlighting.psm1
 |- tests/
+|  |- test-all.ps1
+|  |- test-installer.ps1
 |  |- test-local.ps1
+|  |- test-scenarios.ps1
 |- LICENSE
 |- README.md
 |- pwsh-syntax-highlighting.psd1

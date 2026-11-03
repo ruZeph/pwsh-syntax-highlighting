@@ -12,7 +12,7 @@
     RootModule        = '.\src\pwsh-syntax-highlighting.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '1.1.0'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -69,7 +69,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @()
+    FunctionsToExport = @('Set-SyntaxHighlightingThrottle')
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport   = @()
@@ -78,7 +78,7 @@
     VariablesToExport = @()
 
     # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
-    AliasesToExport   = @()
+    AliasesToExport   = @('syntax-highlighting')
 
     # DSC resources to export from this module
     # DscResourcesToExport = @()
@@ -107,7 +107,12 @@
             IconUri    = 'https://evgeniypeshkov.gallerycdn.vsassets.io/extensions/evgeniypeshkov/syntax-highlighter/0.5.0/1603295122989/Microsoft.VisualStudio.Services.Icons.Default'
 
             # ReleaseNotes of this module
-            # ReleaseNotes = ''
+            ReleaseNotes = @'
+1.1.0 - Upstream parity merge (digitalguy99/pwsh-syntax-highlighting 3.3.1)
+- Add Set-SyntaxHighlightingThrottle + syntax-highlighting alias (tunable render throttle)
+- Skip reserved keywords, variables, comments and operators via TokenFlags instead of a word list
+- Restore publish workflow for the new src/ layout
+'@
 
             # Prerelease string of this module
             # Prerelease = ''

@@ -35,10 +35,30 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $moduleName = 'pwsh-syntax-highlighting'
+
+function Get-VersionFromManifestText {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$ManifestContent)
+
+    if ($ManifestContent -match "ModuleVersion\s*=\s*'([0-9]+(?:\.[0-9]+){1,3})'") {
+        return $Matches[1]
+    }
+    return $null
+}
+
 $profileImportLine = "try { Import-Module '$moduleName' } catch { }"
 $moduleRoot = Join-Path (Join-Path $HOME 'Documents\PowerShell\Modules') $moduleName
 $profileBackupExt = '.pwsh-syntax-highlighting.backup'
-$localVersion = '1.0.0'
+
+# Single source of truth for the version is the module manifest. When this script is
+# run from a clone we read it; when it is piped from the web (irm | iex) we fall back
+# to the bundled constant, which must match the manifest on the release branch.
+$fallbackVersion = '1.1.0'
+$manifestPath = Join-Path (Join-Path $PSScriptRoot '..') 'pwsh-syntax-highlighting.psd1'
+$localVersion = $fallbackVersion
+if (Test-Path -LiteralPath $manifestPath) {
+    $manifestVersion = Get-VersionFromManifestText -ManifestContent (Get-Content -LiteralPath $manifestPath -Raw)
+    if ($manifestVersion) { $localVersion = $manifestVersion }
+}
 
 # Runtime flag configuration state
 $script:EnableMetrics = $false
@@ -137,10 +157,7 @@ function Get-RemoteVersion {
     try {
         Write-Info "Checking remote version..."
         $manifestContent = Invoke-WebRequest -Uri $manifestUrl -ErrorAction Stop -TimeoutSec 5 | Select-Object -ExpandProperty Content
-        if ($manifestContent -match "ModuleVersion.*1\.0\.0") {
-            return "1.0.0"
-        }
-        return $null
+        return (Get-VersionFromManifestText -ManifestContent $manifestContent)
     }
     catch {
         return $null

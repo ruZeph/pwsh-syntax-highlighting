@@ -2,6 +2,44 @@
 
 All notable changes to pwsh-syntax-highlighting are documented in this file.
 
+## [1.1.0] - 2026-05-06
+
+### Upstream parity merge (digitalguy99/pwsh-syntax-highlighting 3.3.1)
+
+Merged the six upstream commits made after this fork branched. Upstream's fixes were
+re-implemented in the fork's architecture rather than copied, because the fork's render
+path (AST token extents, caching, telemetry) differs from upstream's line-text regex.
+
+### Added
+
+- **`Set-SyntaxHighlightingThrottle`** with the upstream-compatible `syntax-highlighting`
+  alias. `syntax-highlighting 100` sets the throttle, `-Get` reads it, `-Reset` restores the
+  50ms default. `PWSH_SYNTAX_HIGHLIGHTING_THROTTLE_MS` works as an import-time equivalent.
+- **`.github/workflows/publish.yml`** restored for the new `src/` layout, with a staged
+  publish directory and manifest validation before `Publish-Module`.
+- Tests: token-gating cases (keywords, variables, comments, operators, strings) and
+  throttle command/alias assertions in `tests/test-local.ps1`.
+
+### Changed
+
+- **Validation is gated on `TokenFlags`**: only tokens flagged `CommandName` are validated.
+  This replaces upstream's hardcoded reserved-keyword list, so `if`/`foreach`/`function`/
+  `exit`/`return`/`try`/`trap`/`throw`/`switch`/`while`/`do`/`class`/`enum`/`workflow`,
+  variables (`$x`, `@args`), comments, numbers, strings and grouping characters are all
+  skipped automatically — no list to maintain when PowerShell adds keywords.
+- Default render throttle is now 50ms (upstream parity), still bypassed for navigation and
+  text-insert keys (arrows, Home/End, Tab, Space, Backspace/Delete).
+- Version is single-sourced from the module manifest: `scripts/install.ps1` (local version +
+  remote version parsing) and the test suites no longer hardcode `1.0.0`.
+
+### Fixed
+
+- Importing the module in a host without PSReadLine (non-interactive `pwsh`, CI) no longer
+  throws `Unable to find type [Microsoft.PowerShell.PSConsoleReadLine]`; preflight now
+  reports the failure cleanly and leaves the session untouched.
+- Installer update detection parsed only the literal `1.0.0` in the remote manifest, so any
+  newer release reported "no update available". It now parses the real `ModuleVersion`.
+
 ## [1.0.0] - 2026-04-06
 
 ### Major Release - First Stable Version

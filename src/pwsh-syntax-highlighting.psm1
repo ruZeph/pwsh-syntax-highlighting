@@ -8,6 +8,11 @@ $script:CommandCacheTtlMs = 5000
 $script:MaxBufferLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_LENGTH } else { 0 }
 $script:MaxCommandLookupLength = if ($env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_MAX_COMMAND_LENGTH } else { 256 }
 
+# Throttle in milliseconds. Matches upstream's default of 50ms and is user-tunable
+# via Set-SyntaxHighlightingThrottle (alias: syntax-highlighting).
+$script:ThrottleLimit = if ($env:PWSH_SYNTAX_HIGHLIGHTING_THROTTLE_MS) { [int]$env:PWSH_SYNTAX_HIGHLIGHTING_THROTTLE_MS } else { 50 }
+if ($script:ThrottleLimit -lt 0) { $script:ThrottleLimit = 0 }
+
 $script:Styles = @{
     ValidCommand   = [System.ConsoleColor]::Green
     InvalidCommand = [System.ConsoleColor]::Red
@@ -18,9 +23,16 @@ $script:Highlighters = @(
         Name      = 'main-command'
         Predicate = {
             param($ctx)
-            -not [string]::IsNullOrWhiteSpace($ctx.TokenText) -and
-            -not $ctx.TokenText.Contains('[') -and
-            -not $ctx.TokenText.Contains(']')
+
+            # Only a real command-name token is validated. This single check replaces
+            # upstream's hardcoded skip list: reserved keywords (if/foreach/function/
+            # exit/return/...), variables ($x, @args), comments (#...), numbers,
+            # strings, grouping/operators and brackets are all non-command tokens.
+            if ([string]::IsNullOrWhiteSpace($ctx.TokenText)) { return $false }
+            if ($ctx.TokenText.Contains('[') -or $ctx.TokenText.Contains(']')) { return $false }
+
+            $commandNameFlag = [System.Management.Automation.Language.TokenFlags]::CommandName
+            return [bool]($ctx.Token.TokenFlags -band $commandNameFlag)
         }
         Paint     = {
             param($ctx)
@@ -135,6 +147,7 @@ $script:PublishMetrics = {
     }
     $m.SafeMode = $script:SafeMode
     $m.DegradedMode = $script:DegradedMode
+    $m.ThrottleLimit = $script:ThrottleLimit
     $m.RenderErrorBudget = $script:RenderErrorBudget
     $m.PreflightPassed = $script:Preflight.Passed
     $global:SyntaxHighlightingMetrics = [pscustomobject]$m
@@ -159,7 +172,15 @@ function Invoke-SyntaxHighlightingPreflight {
         'DeleteChar'
     )
 
-    $availableMethodNames = [Microsoft.PowerShell.PSConsoleReadLine].GetMethods() | Select-Object -ExpandProperty Name -Unique
+    $availableMethodNames = @()
+    try {
+        $availableMethodNames = @([Microsoft.PowerShell.PSConsoleReadLine].GetMethods() | Select-Object -ExpandProperty Name -Unique)
+    }
+    catch {
+        # PSReadLine type is not loaded in this host (e.g. non-interactive pwsh).
+        # Preflight will fail cleanly instead of throwing a type-resolution error.
+        $availableMethodNames = @()
+    }
     $missing = @()
     foreach ($name in $requiredMethods) {
         if ($name -notin $availableMethodNames) {
@@ -196,7 +217,9 @@ $script:RenderAction = {
             return
         }
 
-        $minRenderIntervalMs = 30
+        # High-latency keys respect the tunable throttle; interactive/navigation keys
+        # bypass it so the prompt never feels sticky (upstream: "custom throttle setting").
+        $minRenderIntervalMs = $script:ThrottleLimit
         if ($normalizedKeyInfo.Key -in @(
                 [System.ConsoleKey]::UpArrow,
                 [System.ConsoleKey]::DownArrow,
@@ -419,6 +442,58 @@ $script:RenderAction = {
         return
     }
 }.GetNewClosure()
+
+function Set-SyntaxHighlightingThrottle {
+    <#
+    .SYNOPSIS
+        Gets or sets the render throttle for pwsh-syntax-highlighting.
+    .DESCRIPTION
+        Controls the minimum interval (in milliseconds) between command-validation
+        repaints. Raise it if validation feels laggy on a slow terminal or over SSH;
+        lower it for snappier feedback. Keys that must feel instant (arrows, Home/End,
+        Tab, Space, Backspace/Delete) always bypass the throttle.
+    .PARAMETER Milliseconds
+        Throttle in milliseconds. 0 disables throttling (not recommended).
+    .PARAMETER Get
+        Return the current throttle value instead of changing it.
+    .PARAMETER Reset
+        Restore the default throttle (50ms).
+    .EXAMPLE
+        syntax-highlighting 100
+    .EXAMPLE
+        syntax-highlighting -Get
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Set', SupportsShouldProcess = $true)]
+    param(
+        [Parameter(ParameterSetName = 'Set', Mandatory = $true, Position = 0)]
+        [ValidateRange(0, 5000)]
+        [int]$Milliseconds,
+
+        [Parameter(ParameterSetName = 'Get', Mandatory = $true)]
+        [switch]$Get,
+
+        [Parameter(ParameterSetName = 'Reset', Mandatory = $true)]
+        [switch]$Reset
+    )
+
+    if ($Get) { return $script:ThrottleLimit }
+
+    $targetThrottle = if ($Reset) { 50 } else { $Milliseconds }
+    if (-not $PSCmdlet.ShouldProcess('pwsh-syntax-highlighting render throttle', "Set to ${targetThrottle}ms")) {
+        return
+    }
+
+    $script:ThrottleLimit = $targetThrottle
+    Write-Verbose "Syntax-highlighting throttle set to $($script:ThrottleLimit)ms."
+
+    [pscustomobject]@{
+        Module       = 'pwsh-syntax-highlighting'
+        ThrottleMs   = $script:ThrottleLimit
+        TakesEffect  = 'Immediately (no re-import needed)'
+    }
+}
+
+Set-Alias -Name syntax-highlighting -Value Set-SyntaxHighlightingThrottle
 
 $printableChars = [char[]](0x20..0x7e + 0xa0..0xff)
 $functionKeyMap = @(

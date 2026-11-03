@@ -66,7 +66,7 @@ if (-not (Test-Path $moduleManifest)) {
     throw "Could not find module manifest at $moduleManifest"
 }
 
-Write-Host "[1/4] Running lifecycle stress test ($Cycles cycles)..."
+Write-Host "[1/11] Running lifecycle stress test ($Cycles cycles)..."
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $cycleFailures = @()
 for ($i = 1; $i -le $Cycles; $i++) {
@@ -88,7 +88,7 @@ if ($cycleFailures.Count -gt 0) {
 
 Write-Host "  PASS: $Cycles cycles in $([math]::Round($sw.Elapsed.TotalMilliseconds, 2)) ms"
 
-Write-Host "[2/4] Validating custom key bindings after import..."
+Write-Host "[2/11] Validating custom key bindings after import..."
 Import-Module $moduleManifest -Force -ErrorAction Stop
 foreach ($k in $keys) {
     Assert-Equal -Name "Custom key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected 'ValidatePrograms'
@@ -103,13 +103,13 @@ foreach ($pasteKey in @('Ctrl+v', 'Shift+Insert')) {
 }
 Write-Host "  PASS: custom key bindings are active"
 
-Write-Host "[3/4] Validating render action smoke test..."
+Write-Host "[3/11] Validating render action smoke test..."
 $module = Get-Module $moduleName -ErrorAction Stop
 $renderResult = & $module { & $script:RenderAction; 'render-ok' }
 Assert-Equal -Name 'RenderAction invocation' -Actual $renderResult -Expected 'render-ok'
 Write-Host "  PASS: render action executes"
 
-Write-Host "[4/5] Validating immediate-key throttle bypass edge case..."
+Write-Host "[4/11] Validating immediate-key throttle bypass edge case..."
 $throttleCheck = & $module {
     $script:EnableTelemetry = $true
     $script:Perf.Throttled = 0
@@ -122,7 +122,7 @@ $throttleCheck = & $module {
 Assert-Equal -Name 'Space key should bypass throttle at 0ms elapsed' -Actual ([string]$throttleCheck) -Expected '0'
 Write-Host "  PASS: immediate-key throttle bypass works"
 
-Write-Host "[5/6] Validating debug trace and cache behavior under simulated key flow..."
+Write-Host "[5/11] Validating debug trace and cache behavior under simulated key flow..."
 $debugCheck = & $module {
     $script:EnableTelemetry = $true
     $script:EnableDebugTrace = $true
@@ -151,7 +151,7 @@ Assert-True -Name 'Debug simulation should produce trace events' -Condition ($de
 Assert-Equal -Name 'Space in simulated flow should not throttle' -Actual ([string]$debugCheck.SpaceThrottled) -Expected '0'
 Write-Host "  PASS: debug trace behavior validated"
 
-Write-Host "[6/7] Validating command cache miss/hit behavior directly..."
+Write-Host "[6/11] Validating command cache miss/hit behavior directly..."
 $cacheCheck = & $module {
     $script:EnableTelemetry = $true
     $script:Perf.CacheHit = 0
@@ -173,7 +173,7 @@ Assert-True -Name 'Direct cache check should produce hit(s)' -Condition ($cacheC
 Assert-True -Name 'Direct cache check should produce miss(es)' -Condition ($cacheCheck.CacheMiss -ge 1)
 Write-Host "  PASS: debug trace and cache behavior validated"
 
-Write-Host "[7/8] Validating failure injection resilience..."
+Write-Host "[7/11] Validating failure injection resilience..."
 $injectionCheck = & $module {
     $original = $script:AddDebugTraceEvent
     $script:AddDebugTraceEvent = { throw 'debug-trace-failure' }
@@ -192,7 +192,7 @@ $injectionCheck = & $module {
 Assert-Equal -Name 'Render path should survive injected debug failure' -Actual $injectionCheck -Expected 'ok'
 Write-Host "  PASS: failure injection resilience validated"
 
-Write-Host "[8/9] Validating safe-mode reduced keymap..."
+Write-Host "[8/11] Validating safe-mode reduced keymap..."
 Remove-Module $moduleName -ErrorAction SilentlyContinue
 $env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE = '1'
 Import-Module $moduleManifest -Force -ErrorAction Stop
@@ -203,7 +203,52 @@ Remove-Item Env:PWSH_SYNTAX_HIGHLIGHTING_SAFE_MODE -ErrorAction SilentlyContinue
 Import-Module $moduleManifest -Force -ErrorAction Stop
 Write-Host "  PASS: safe-mode reduced keymap validated"
 
-Write-Host "[9/9] Validating key binding restore after remove..."
+Write-Host "[9/11] Validating upstream-parity token gating (keywords, variables, comments)..."
+$gateCases = @(
+    @{ Line = 'Get-ChildItem'; Expect = $true }
+    @{ Line = 'git status'; Expect = $true }
+    @{ Line = '.\script.ps1'; Expect = $true }
+    @{ Line = '    Get-Date'; Expect = $true }
+    @{ Line = 'if (Test-Path x) { }'; Expect = $false }
+    @{ Line = 'foreach ($i in 1..3) { }'; Expect = $false }
+    @{ Line = 'function foo { }'; Expect = $false }
+    @{ Line = 'exit'; Expect = $false }
+    @{ Line = 'return 1'; Expect = $false }
+    @{ Line = 'try { } catch { }'; Expect = $false }
+    @{ Line = '$foo'; Expect = $false }
+    @{ Line = '@args'; Expect = $false }
+    @{ Line = '# comment'; Expect = $false }
+    @{ Line = '(Get-Date)'; Expect = $false }
+    @{ Line = '1 + 2'; Expect = $false }
+    @{ Line = "'quoted'"; Expect = $false }
+)
+
+$module = Get-Module $moduleName -ErrorAction Stop
+$gateFailures = @()
+foreach ($case in $gateCases) {
+    $gateTokens = $null; $gateErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput($case.Line, [ref]$gateTokens, [ref]$gateErrors)
+    $gateCtx = [pscustomobject]@{ Token = $gateTokens[0]; TokenText = [string]$gateTokens[0].Text }
+    $gateActual = [bool](& $module { param($c) & $script:Highlighters[0].Predicate $c } $gateCtx)
+    if ($gateActual -ne $case.Expect) {
+        $gateFailures += "'$($case.Line)' expected=$($case.Expect) actual=$gateActual"
+    }
+}
+if ($gateFailures.Count -gt 0) {
+    $gateFailures | ForEach-Object { Write-Host "  $_" }
+    throw "Token gating failed for $($gateFailures.Count) case(s)."
+}
+Write-Host "  PASS: keywords, variables, comments and operators are not validated"
+
+Write-Host "[10/11] Validating throttle command (Set-SyntaxHighlightingThrottle)..."
+Assert-Equal -Name 'Throttle default value' -Actual ([string](Set-SyntaxHighlightingThrottle -Get)) -Expected '50'
+Assert-Equal -Name 'Throttle set value' -Actual ([string](Set-SyntaxHighlightingThrottle 120).ThrottleMs) -Expected '120'
+Assert-Equal -Name 'Throttle persists after set' -Actual ([string](Set-SyntaxHighlightingThrottle -Get)) -Expected '120'
+Assert-Equal -Name 'Throttle reset value' -Actual ([string](Set-SyntaxHighlightingThrottle -Reset).ThrottleMs) -Expected '50'
+Assert-Equal -Name 'Throttle alias' -Actual ([string](Get-Alias -Name 'syntax-highlighting').Definition) -Expected 'Set-SyntaxHighlightingThrottle'
+Write-Host "  PASS: throttle command and alias validated"
+
+Write-Host "[11/11] Validating key binding restore after remove..."
 Remove-Module $moduleName -ErrorAction Stop
 foreach ($k in $expectedDefault.Keys) {
     Assert-Equal -Name "Default key binding ($k)" -Actual (Get-KeyFunction -Key $k) -Expected $expectedDefault[$k]

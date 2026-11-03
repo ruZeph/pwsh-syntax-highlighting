@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Installer safety and functionality tests for pwsh-syntax-highlighting v1.0.0
+    Installer safety and functionality tests for pwsh-syntax-highlighting
 .DESCRIPTION
     Tests installer features including safety checks, profile modification,
     version detection, and rollback mechanisms.
@@ -17,6 +17,9 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $installerScript = Join-Path (Join-Path $repoRoot 'scripts') 'install.ps1'
 $moduleManifest = Join-Path $repoRoot 'pwsh-syntax-highlighting.psd1'
 $moduleName = 'pwsh-syntax-highlighting'
+
+# Version is single-sourced from the module manifest (no hardcoded literal to drift).
+$expectedVersion = if ((Get-Content -LiteralPath $moduleManifest -Raw) -match "ModuleVersion\s*=\s*'([0-9.]+)'") { $Matches[1] } else { 'unknown' }
 
 $testResults = @{
     Passed   = 0
@@ -105,11 +108,11 @@ Write-TestHeader "Version Management"
 $testResults.Total++
 
 if (Select-String -Path $installerScript -Pattern "\`$localVersion\s*=\s*" -Quiet) {
-    Write-TestPass "Version constant set to 1.0.0"
+    Write-TestPass "Version constant present (manifest-derived: $expectedVersion)"
     $testResults.Passed++
 }
 else {
-    Write-TestFail "Version constant" "Not set to 1.0.0 or not found"
+    Write-TestFail "Version constant" "Not set or not found"
     $testResults.Failed++
 }
 
@@ -190,12 +193,16 @@ $testResults.Total++
 
 try {
     $manifestContent = Get-Content $moduleManifest -Raw
-    if ($manifestContent -match "ModuleVersion.*1\.0\.0") {
-        Write-TestPass "Module manifest version is 1.0.0"
+    if ($manifestContent -match "ModuleVersion\s*=\s*'([0-9.]+)'" -and $Matches[1] -eq $expectedVersion) {
+        Write-TestPass "Module manifest version is $expectedVersion"
         $testResults.Passed++
     }
+    elseif ($manifestContent -notmatch 'ModuleVersion') {
+        Write-TestFail "Module manifest version" "ModuleVersion missing from manifest"
+        $testResults.Failed++
+    }
     else {
-        Write-TestFail "Module manifest version" "Not 1.0.0"
+        Write-TestFail "Module manifest version" "Manifest version does not match $expectedVersion"
         $testResults.Failed++
     }
 }
@@ -210,7 +217,7 @@ catch {
 
 Write-Host "`n" -NoNewline
 Write-Host "═════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
-Write-Host "INSTALLER TESTS SUMMARY (v1.0.0)" -ForegroundColor Magenta
+Write-Host "INSTALLER TESTS SUMMARY (v$expectedVersion)" -ForegroundColor Magenta
 Write-Host "═════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
 
 Write-Host "  Total Tests:  $($testResults.Total)" -ForegroundColor White

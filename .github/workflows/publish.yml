@@ -1,0 +1,32 @@
+name: Publish
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/pwsh-syntax-highlighting.psm1'
+      - 'pwsh-syntax-highlighting.psd1'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage module layout
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP 'pwsh-syntax-highlighting'
+          New-Item -ItemType Directory -Path (Join-Path $staging 'src') -Force | Out-Null
+          Copy-Item 'pwsh-syntax-highlighting.psd1' $staging
+          Copy-Item 'src/pwsh-syntax-highlighting.psm1' (Join-Path $staging 'src')
+          Copy-Item 'README.md', 'LICENSE' $staging
+          Test-ModuleManifest (Join-Path $staging 'pwsh-syntax-highlighting.psd1') | Out-Null
+
+      - name: Publish module
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:RUNNER_TEMP 'pwsh-syntax-highlighting'
+          Publish-Module -Path $staging -Repository PSGallery -NuGetApiKey ${{ secrets.PSG_API_KEY }}
