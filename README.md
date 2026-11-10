@@ -73,9 +73,33 @@ irm 'https://raw.githubusercontent.com/ruZeph/pwsh-syntax-highlighting/main/scri
 # - Update recommendation when an upgrade is available
 ```
 
-**Current version**: 1.1.0
+**Current version**: 1.2.2
 
 To see what's new, check the [repository changelog](https://github.com/ruZeph/pwsh-syntax-highlighting/releases).
+
+## Releases
+
+Release builds are automated by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+1. Bump `ModuleVersion` in `pwsh-syntax-highlighting.psd1` and add a matching `## [x.y.z]` section to
+   `CHANGELOG.md`.
+2. Push to `main`. The workflow validates the manifest, runs PSScriptAnalyzer and the full test
+   suite, then creates the `vx.y.z` tag and publishes a GitHub Release containing
+   `pwsh-syntax-highlighting-x.y.z.zip` and its `.sha256` checksum.
+3. Nothing is published when the manifest version is already tagged, so documentation-only pushes
+   stay quiet.
+
+Other entry points:
+
+- Push a `v*` tag by hand - the tag must match `ModuleVersion`, otherwise the run fails with an
+  explanation instead of shipping a mislabelled package.
+- Re-run the workflow from the Actions tab (or `gh workflow run release.yml`) to rebuild the assets
+  for the current `ModuleVersion`; existing release assets are replaced. Set the `dry_run` input to
+  build and verify the package without tagging or publishing.
+
+The tag is only created after the tests pass, so a failing build leaves no tag behind. The zip
+unpacks as `pwsh-syntax-highlighting/<version>/...`, so extracting it into
+`Documents\PowerShell\Modules` is a complete install.
 
 ## Upstream Parity
 
@@ -341,6 +365,7 @@ Run micro-benchmark only:
 |- .github/
 |  |- workflows/
 |     |- publish.yml (manual-only PSGallery publish; disabled)
+|     |- release.yml (tested build, tag and GitHub Release from ModuleVersion)
 |     |- test.yml (manifest, analyzer and test suites)
 |- assets/
 |  |- icon.png (module/gallery icon, referenced by psd1 IconUri)

@@ -1,0 +1,408 @@
+name: Release
+
+# Builds a tested module package and publishes it as a GitHub Release.
+#
+#   push to main      -> releases only when ModuleVersion in the psd1 is not tagged yet.
+#                        Bump ModuleVersion + CHANGELOG, push, done.
+#   push of a v* tag  -> releases that tag; the tag must match ModuleVersion.
+#   workflow_dispatch -> rebuilds the release for the current ModuleVersion (asset refresh,
+#                        e.g. after a broken build or a re-run on an older commit).
+#
+# The tag is created in the release job, *after* the tests pass, so a failed
+# build never leaves a dangling tag that would block the next attempt.
+# GITHUB_TOKEN pushes do not retrigger workflows, so the tag created here cannot
+# start a release loop.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and verify the package without creating a tag or release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MODULE_NAME: pwsh-syntax-highlighting
+
+jobs:
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+      checkout_ref: ${{ steps.version.outputs.checkout_ref }}
+      should_release: ${{ steps.version.outputs.should_release }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      dry_run: ${{ steps.version.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and tag
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE "$env:MODULE_NAME.psd1"
+          if (-not (Test-Path -LiteralPath $manifestPath)) {
+            throw "Manifest not found: $manifestPath"
+          }
+          $manifestText = Get-Content -LiteralPath $manifestPath -Raw
+          if ($manifestText -notmatch "ModuleVersion\s*=\s*'([^']+)'") {
+            throw "Could not read ModuleVersion from $manifestPath."
+          }
+          $manifestVersion = $Matches[1]
+
+          $dryRun = $env:DRY_RUN -eq 'true'
+          $isTagPush = ($env:EVENT_NAME -eq 'push') -and ($env:REF_TYPE -eq 'tag')
+
+          if ($isTagPush) {
+            if ($env:REF_NAME -notmatch '^v(?<version>.+)$') {
+              throw "Release tags must look like v1.2.3 (got '$env:REF_NAME')."
+            }
+            $version = $Matches.version
+            if ($version -ne $manifestVersion) {
+              throw ("Tag '$env:REF_NAME' says $version but ModuleVersion in the manifest is $manifestVersion. " +
+                'Bump ModuleVersion and re-tag, or push the tag on the commit that already contains the bump.')
+            }
+          }
+          else {
+            $version = $manifestVersion
+          }
+
+          if ($version -notmatch '^\d+(\.\d+){1,3}(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$') {
+            throw "'$version' is not a valid module version (expected e.g. 1.2.3 or 1.2.3-beta.1)."
+          }
+
+          $tag = "v$version"
+          $prerelease = if ($version.Contains('-')) { 'true' } else { 'false' }
+
+          gh api "repos/$($env:REPO)/git/ref/tags/$tag" --silent 2>$null | Out-Null
+          $tagExists = $LASTEXITCODE -eq 0
+
+          $shouldRelease = 'true'
+          if ($env:EVENT_NAME -eq 'push' -and -not $isTagPush -and $tagExists) {
+            $shouldRelease = 'false'
+            Write-Host "::notice title=Nothing to release::ModuleVersion $version is already tagged as $tag."
+          }
+
+          # Build the code that the release describes: the tagged commit when the
+          # tag exists (re-runs), otherwise the commit being tested right now.
+          $checkoutRef = if ($tagExists) { "refs/tags/$tag" } else { $env:HEAD_SHA }
+
+          @(
+            "version=$version"
+            "tag=$tag"
+            "sha=$($env:HEAD_SHA)"
+            "checkout_ref=$checkoutRef"
+            "should_release=$shouldRelease"
+            "prerelease=$prerelease"
+            "dry_run=$($dryRun.ToString().ToLowerInvariant())"
+          ) | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          @(
+            '### Release plan'
+            ''
+            '| Field | Value |'
+            '| --- | --- |'
+            ('| Version | `' + $version + '` |')
+            ('| Tag | `' + $tag + '` |')
+            ('| Tag exists | `' + $tagExists + '` |')
+            ('| Publish | `' + $shouldRelease + '` |')
+            ('| Prerelease | `' + ($prerelease -eq 'true') + '` |')
+            ('| Dry run | `' + $dryRun + '` |')
+            ('| Build ref | `' + $checkoutRef + '` |')
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+  build:
+    name: Build package
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Validate manifest
+        shell: pwsh
+        run: Test-ModuleManifest ./pwsh-syntax-highlighting.psd1 | Out-Null
+
+      - name: PSScriptAnalyzer (errors fail the build)
+        shell: pwsh
+        run: |
+          $findings = Invoke-ScriptAnalyzer -Path ./src/pwsh-syntax-highlighting.psm1 -Severity Error
+          $findings += Invoke-ScriptAnalyzer -Path ./scripts -Severity Error
+          if ($findings) {
+            $findings | Format-Table RuleName, ScriptName, Line, Message -Wrap | Out-String | Write-Host
+            throw "$($findings.Count) analyzer error(s) found."
+          }
+
+      - name: Full test suite
+        shell: pwsh
+        run: ./tests/test-all.ps1 -StressCycles 3
+
+      - name: Stage module
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $moduleDir = Join-Path $env:RUNNER_TEMP "stage\$env:MODULE_NAME\$env:VERSION"
+          $null = New-Item -ItemType Directory -Path (Join-Path $moduleDir 'src') -Force
+          $null = New-Item -ItemType Directory -Path (Join-Path $moduleDir 'assets') -Force
+
+          Copy-Item "$env:MODULE_NAME.psd1" $moduleDir
+          Copy-Item 'src/pwsh-syntax-highlighting.psm1' (Join-Path $moduleDir 'src')
+          Copy-Item 'assets/icon.png' (Join-Path $moduleDir 'assets')
+          Copy-Item 'README.md', 'LICENSE', 'CHANGELOG.md' $moduleDir
+
+          Write-Host "Staged $moduleDir"
+          Get-ChildItem -Recurse -File $moduleDir | ForEach-Object {
+            $_.FullName.Substring($moduleDir.Length + 1)
+          } | Sort-Object | Write-Host
+
+      - name: Verify staged package imports
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $moduleDir = Join-Path $env:RUNNER_TEMP "stage\$env:MODULE_NAME\$env:VERSION"
+          $manifest = Test-ModuleManifest (Join-Path $moduleDir "$env:MODULE_NAME.psd1")
+          if ($manifest.Version.ToString() -ne $env:VERSION) {
+            throw "Staged manifest is $($manifest.Version), expected $env:VERSION."
+          }
+
+          Import-Module (Join-Path $moduleDir "$env:MODULE_NAME.psd1") -Force -ErrorAction Stop
+          $loaded = Get-Module $env:MODULE_NAME
+          if (-not $loaded) { throw 'Staged module did not import.' }
+          if ($loaded.Version.ToString() -ne $env:VERSION) {
+            throw "Imported version $($loaded.Version), expected $env:VERSION."
+          }
+          if (-not (Get-Command -Name Set-SyntaxHighlightingThrottle -Module $env:MODULE_NAME -ErrorAction SilentlyContinue)) {
+            throw 'Set-SyntaxHighlightingThrottle is missing from the staged package.'
+          }
+          if (-not (Get-Alias -Name syntax-highlighting -ErrorAction SilentlyContinue)) {
+            throw 'The syntax-highlighting alias is missing from the staged package.'
+          }
+
+          Write-Host "Imported $($loaded.Name) $($loaded.Version) from the staged layout."
+          Remove-Module $env:MODULE_NAME -Force
+
+      - name: Create package and checksum
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $stageRoot = Join-Path $env:RUNNER_TEMP 'stage'
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          $null = New-Item -ItemType Directory -Path $dist -Force
+
+          $zipName = "$env:MODULE_NAME-$env:VERSION.zip"
+          $zipPath = Join-Path $dist $zipName
+          # Compress the module-name folder so the archive unpacks as
+          # <Modules>/pwsh-syntax-highlighting/<version>/... - a drop-in layout.
+          Compress-Archive -Path (Join-Path $stageRoot $env:MODULE_NAME) -DestinationPath $zipPath -CompressionLevel Optimal -Force
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $entries = $archive.Entries.FullName -replace '\\', '/'
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+          $required = @(
+            "$env:MODULE_NAME/$env:VERSION/$env:MODULE_NAME.psd1"
+            "$env:MODULE_NAME/$env:VERSION/src/pwsh-syntax-highlighting.psm1"
+            "$env:MODULE_NAME/$env:VERSION/README.md"
+            "$env:MODULE_NAME/$env:VERSION/LICENSE"
+          )
+          foreach ($entry in $required) {
+            if ($entries -notcontains $entry) { throw "Package is missing $entry." }
+          }
+          $unwanted = $entries | Where-Object { $_ -match '(^|/)(tests|scripts|\.github|\.git)/' }
+          if ($unwanted) { throw "Package contains files that must not ship: $($unwanted -join ', ')" }
+
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zipName" | Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii
+
+          Write-Host "Built $zipName ($((Get-Item $zipPath).Length) bytes)"
+          Write-Host "SHA256 $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ needs.prepare.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_release == 'true' && needs.prepare.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-${{ needs.prepare.outputs.version }}
+          path: dist
+
+      - name: Compose release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:VERSION
+          $repo = $env:REPO
+
+          # Changelog section for this exact version, so the release body is the
+          # same text a reader finds in CHANGELOG.md.
+          $notes = ''
+          if (Test-Path -LiteralPath 'CHANGELOG.md') {
+            $changelog = Get-Content -LiteralPath 'CHANGELOG.md' -Raw
+            $pattern = "(?ms)^##\s*\[$([regex]::Escape($version))\][^\r\n]*(?<notes>.*?)(?=^##\s*\[|\z)"
+            if ($changelog -match $pattern) {
+              # Keep the section heading so the date travels with the notes.
+              $notes = $Matches[0].Trim()
+            }
+          }
+
+          # Fallback: the first block of the manifest's ReleaseNotes (that block
+          # describes the version currently in the manifest).
+          if (-not $notes) {
+            $manifest = Get-Content -LiteralPath "$env:MODULE_NAME.psd1" -Raw
+            $escaped = [regex]::Escape($version)
+            if ($manifest -match "(?ms)^$escaped\s+-\s+.*?(?=\r?\n\s*\r?\n[0-9]+\.[0-9]+|\r?\n'@)") {
+              $notes = $Matches[0].Trim()
+            }
+          }
+          if (-not $notes) {
+            $notes = "No changelog entry found for $version. See CHANGELOG.md."
+          }
+
+          $zipName = "$env:MODULE_NAME-$version.zip"
+          $lines = @(
+            $notes
+            ''
+            '## Install'
+            ''
+            'Interactive installer (current-user module path, profile autoload handled for you):'
+            ''
+            '```powershell'
+            "irm 'https://raw.githubusercontent.com/$repo/main/scripts/install.ps1' | iex"
+            '```'
+            ''
+            'Or use the package attached to this release:'
+            ''
+            '```powershell'
+            '$modules = Join-Path ([Environment]::GetFolderPath(''MyDocuments'')) ''PowerShell/Modules'''
+            "Expand-Archive './$zipName' -DestinationPath `$modules -Force"
+            'Import-Module pwsh-syntax-highlighting -Force'
+            '```'
+            ''
+            "The archive unpacks as ``pwsh-syntax-highlighting/$version/...``, so extracting it into a ``Modules`` folder is all that is needed."
+            ''
+            '## Assets'
+            ''
+            '| File | Purpose |'
+            '| --- | --- |'
+            "| ``$zipName`` | Module package: manifest, ``src``, icon, README, LICENSE, CHANGELOG |"
+            "| ``$zipName.sha256`` | SHA-256 checksum |"
+            ''
+            '## Verify the download'
+            ''
+            '```powershell'
+            "(Get-FileHash './$zipName' -Algorithm SHA256).Hash"
+            '```'
+          )
+
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $lines -join "`n" | Set-Content -LiteralPath $notesPath -Encoding utf8
+          Write-Host "Release notes written to $notesPath"
+          Get-Content -LiteralPath $notesPath
+
+      - name: Create tag and release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Tag only now that tests have passed, at the commit that was built.
+          gh api "repos/$($env:REPO)/git/ref/tags/$($env:TAG)" --silent 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh api "repos/$($env:REPO)/git/refs" -f ref="refs/tags/$($env:TAG)" -f sha="$($env:SHA)" --jq '.ref'
+            if ($LASTEXITCODE -ne 0) { throw "Could not create tag $env:TAG." }
+            Write-Host "Created tag $env:TAG at $($env:SHA.Substring(0, 7))"
+          }
+
+          $assets = @(Get-ChildItem -Path dist -File | ForEach-Object { $_.FullName })
+          if (-not $assets) { throw 'No release assets were downloaded.' }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+
+          gh release view $env:TAG --json tagName --jq .tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:TAG already exists; refreshing assets and notes."
+            & gh release upload $env:TAG @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upload assets to $env:TAG." }
+            & gh release edit $env:TAG --notes-file $notesPath --title $env:TAG "--prerelease=$($env:PRERELEASE)"
+          }
+          else {
+            $ghArgs = @(
+              'release', 'create', $env:TAG
+              '--verify-tag'
+              '--title', $env:TAG
+              '--notes-file', $notesPath
+              "--prerelease=$($env:PRERELEASE)"
+            ) + $assets
+            & gh @ghArgs
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create release $env:TAG." }
+          }
+
+          $url = "https://github.com/$($env:REPO)/releases/tag/$($env:TAG)"
+          Write-Host "::notice title=Released $env:VERSION::$url"
+          "### Released [$env:TAG]($url)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
