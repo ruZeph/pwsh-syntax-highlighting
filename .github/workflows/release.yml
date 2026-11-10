@@ -64,6 +64,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # pwsh 7.4+ treats a non-zero native exit code as a terminating error by
+          # default, which would turn the deliberate "does this tag exist?" probe
+          # into a silent failure. This step checks $LASTEXITCODE itself.
+          $PSNativeCommandUseErrorActionPreference = $false
 
           $manifestPath = Join-Path $env:GITHUB_WORKSPACE "$env:MODULE_NAME.psd1"
           if (-not (Test-Path -LiteralPath $manifestPath)) {
@@ -371,6 +375,8 @@ jobs:
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # Exit codes are checked explicitly below; see the note in the prepare job.
+          $PSNativeCommandUseErrorActionPreference = $false
 
           # Tag only now that tests have passed, at the commit that was built.
           gh api "repos/$($env:REPO)/git/ref/tags/$($env:TAG)" --silent 2>$null | Out-Null
