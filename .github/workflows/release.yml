@@ -64,10 +64,6 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # pwsh 7.4+ treats a non-zero native exit code as a terminating error by
-          # default, which would turn the deliberate "does this tag exist?" probe
-          # into a silent failure. This step checks $LASTEXITCODE itself.
-          $PSNativeCommandUseErrorActionPreference = $false
 
           $manifestPath = Join-Path $env:GITHUB_WORKSPACE "$env:MODULE_NAME.psd1"
           if (-not (Test-Path -LiteralPath $manifestPath)) {
@@ -103,8 +99,25 @@ jobs:
           $tag = "v$version"
           $prerelease = if ($version.Contains('-')) { 'true' } else { 'false' }
 
-          gh api "repos/$($env:REPO)/git/ref/tags/$tag" --silent 2>$null | Out-Null
-          $tagExists = $LASTEXITCODE -eq 0
+          # Ask the REST API through Invoke-RestMethod rather than `gh`: a native
+          # command that exits non-zero for the expected "tag does not exist" case
+          # leaks its exit code into the step result, which fails the job even
+          # though every output was written.
+          $tagExists = $false
+          $headers = @{
+            Authorization          = "Bearer $env:GH_TOKEN"
+            Accept                 = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          try {
+            $null = Invoke-RestMethod -Uri "https://api.github.com/repos/$($env:REPO)/git/ref/tags/$tag" -Headers $headers -ErrorAction Stop
+            $tagExists = $true
+          }
+          catch {
+            $status = 0
+            if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+            if ($status -ne 404) { throw "Tag lookup for $tag failed (HTTP ${status}): $($_.Exception.Message)" }
+          }
 
           $shouldRelease = 'true'
           if ($env:EVENT_NAME -eq 'push' -and -not $isTagPush -and $tagExists) {
@@ -395,7 +408,11 @@ jobs:
             Write-Host "Release $env:TAG already exists; refreshing assets and notes."
             & gh release upload $env:TAG @assets --clobber
             if ($LASTEXITCODE -ne 0) { throw "Failed to upload assets to $env:TAG." }
-            & gh release edit $env:TAG --notes-file $notesPath --title $env:TAG "--prerelease=$($env:PRERELEASE)"
+
+            $editArgs = @('release', 'edit', $env:TAG, '--notes-file', $notesPath, '--title', $env:TAG)
+            $editArgs += if ($env:PRERELEASE -eq 'true') { '--prerelease' } else { '--prerelease=false' }
+            & gh @editArgs
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release $env:TAG." }
           }
           else {
             $ghArgs = @(
@@ -403,8 +420,9 @@ jobs:
               '--verify-tag'
               '--title', $env:TAG
               '--notes-file', $notesPath
-              "--prerelease=$($env:PRERELEASE)"
-            ) + $assets
+            )
+            if ($env:PRERELEASE -eq 'true') { $ghArgs += '--prerelease' }
+            $ghArgs += $assets
             & gh @ghArgs
             if ($LASTEXITCODE -ne 0) { throw "Failed to create release $env:TAG." }
           }
